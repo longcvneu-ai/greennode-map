@@ -1,0 +1,53 @@
+export const collateralAssets = [
+  {
+    maTsbd: 'BD001',
+    maTsDg: 'DG001',
+    cif: 'CIF001',
+    ngayNhanTsbd: '2026-07-20',
+    gtBaoDam: 12000000000,
+    duNoTsbd: 8000000000,
+    thanhKhoan: 'Khá',
+    trangThaiTsbd: 'Đang bảo đảm',
+    ngayGiaiChap: null,
+    donViQuanLy: 'Đơn vị Hà Nội',
+  },
+
+  {
+    maTsbd: 'BD002',
+    maTsDg: 'DG002',
+    cif: 'CIF002',
+    ngayNhanTsbd: '2026-07-22',
+    gtBaoDam: 10000000000,
+    duNoTsbd: 6000000000,
+    thanhKhoan: 'Khá',
+    trangThaiTsbd: 'Đang bảo đảm',
+    ngayGiaiChap: null,
+    donViQuanLy: 'Đơn vị Hà Nội',
+  },
+
+  {
+    maTsbd: 'BD003',
+    maTsDg: 'DG004',
+    cif: 'CIF003',
+    ngayNhanTsbd: '2026-07-25',
+    gtBaoDam: 1600000000,
+    duNoTsbd: 1200000000,
+    thanhKhoan: 'Trung bình',
+    trangThaiTsbd: 'Đang bảo đảm',
+    ngayGiaiChap: null,
+    donViQuanLy: 'Đơn vị Hà Nội',
+  },
+
+  {
+    maTsbd: 'BD004',
+    maTsDg: 'DG005',
+    cif: 'CIF004',
+    ngayNhanTsbd: '2026-07-28',
+    gtBaoDam: 4000000000,
+    duNoTsbd: 3000000000,
+    thanhKhoan: 'Trung bình',
+    trangThaiTsbd: 'Đang bảo đảm',
+    ngayGiaiChap: null,
+    donViQuanLy: 'Đơn vị TP.HCM',
+  },
+]

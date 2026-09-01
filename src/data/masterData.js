@@ -1,0 +1,68 @@
+export const masterData = [
+  {
+    loaiDanhMuc: 'NHOM_TS_CAP1',
+    maGiaTri: 'BDS',
+    tenGiaTri: 'BĐS',
+    thuTu: 1,
+    trangThai: 'ACTIVE',
+    giaTriCha: null,
+  },
+  {
+    loaiDanhMuc: 'NHOM_TS_CAP1',
+    maGiaTri: 'DONG_SAN',
+    tenGiaTri: 'Động sản',
+    thuTu: 2,
+    trangThai: 'ACTIVE',
+    giaTriCha: null,
+  },
+
+  {
+    loaiDanhMuc: 'LOAI_TS_CAP2',
+    maGiaTri: 'NHA_DAT',
+    tenGiaTri: 'Nhà đất',
+    thuTu: 1,
+    trangThai: 'ACTIVE',
+    giaTriCha: 'BDS',
+  },
+  {
+    loaiDanhMuc: 'LOAI_TS_CAP2',
+    maGiaTri: 'CHCC',
+    tenGiaTri: 'CHCC',
+    thuTu: 2,
+    trangThai: 'ACTIVE',
+    giaTriCha: 'BDS',
+  },
+  {
+    loaiDanhMuc: 'LOAI_TS_CAP2',
+    maGiaTri: 'OTO',
+    tenGiaTri: 'Ô tô',
+    thuTu: 3,
+    trangThai: 'ACTIVE',
+    giaTriCha: 'DONG_SAN',
+  },
+  {
+    loaiDanhMuc: 'LOAI_TS_CAP2',
+    maGiaTri: 'HANG_HOA',
+    tenGiaTri: 'Hàng hóa',
+    thuTu: 4,
+    trangThai: 'ACTIVE',
+    giaTriCha: 'DONG_SAN',
+  },
+
+  {
+    loaiDanhMuc: 'THANH_KHOAN',
+    maGiaTri: 'KHA',
+    tenGiaTri: 'Khá',
+    thuTu: 1,
+    trangThai: 'ACTIVE',
+    giaTriCha: null,
+  },
+  {
+    loaiDanhMuc: 'THANH_KHOAN',
+    maGiaTri: 'TRUNG_BINH',
+    tenGiaTri: 'Trung bình',
+    thuTu: 2,
+    trangThai: 'ACTIVE',
+    giaTriCha: null,
+  },
+]
