@@ -72,6 +72,7 @@ function AssetMap({
   assets,
   selectedAssetId,
   onViewDetail,
+  changeType,
 }) {
   const markerRefs = useRef({})
 
@@ -149,7 +150,15 @@ function AssetMap({
                     : '—'}
                 </strong>
               </div>
+{changeType !== 'Tất cả' && (
+  <div className="popup-row">
+    <span>Biến động</span>
 
+    <strong>
+      {changeType}
+    </strong>
+  </div>
+)}
               <button
                 type="button"
                 className="popup-detail-button"

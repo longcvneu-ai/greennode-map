@@ -1,5 +1,8 @@
 export const valuationAssets = [
   {
+    recordId: 'VAL_REC_001',
+    assetLinkId: null,
+
     maTsDg: 'DG001',
     nhomTsCap1: 'BĐS',
     loaiTsCap2: 'Nhà đất',
@@ -18,6 +21,9 @@ export const valuationAssets = [
   },
 
   {
+    recordId: 'VAL_REC_002',
+    assetLinkId: null,
+
     maTsDg: 'DG002',
     nhomTsCap1: 'BĐS',
     loaiTsCap2: 'CHCC',
@@ -36,6 +42,9 @@ export const valuationAssets = [
   },
 
   {
+    recordId: 'VAL_REC_003',
+    assetLinkId: null,
+
     maTsDg: 'DG003',
     nhomTsCap1: 'BĐS',
     loaiTsCap2: 'Nhà đất',
@@ -54,6 +63,9 @@ export const valuationAssets = [
   },
 
   {
+    recordId: 'VAL_REC_004',
+    assetLinkId: null,
+
     maTsDg: 'DG004',
     nhomTsCap1: 'Động sản',
     loaiTsCap2: 'Ô tô',
@@ -72,6 +84,9 @@ export const valuationAssets = [
   },
 
   {
+    recordId: 'VAL_REC_005',
+    assetLinkId: null,
+
     maTsDg: 'DG005',
     nhomTsCap1: 'Động sản',
     loaiTsCap2: 'Hàng hóa',

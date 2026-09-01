@@ -538,6 +538,21 @@ const comparisonToTotalDebt =
   const formatBillion = (value) =>
     `${(value / 1_000_000_000).toFixed(1)} tỷ`
 
+  const handleSelectAssetFromTable = (maTsDg) => {
+  setSelectedAssetId(maTsDg)
+
+  setTimeout(() => {
+    const mapPanel =
+      document.getElementById('asset-map-panel')
+
+    if (mapPanel) {
+      mapPanel.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center',
+      })
+    }
+  }, 100)
+}
   const handleViewAssetDetail = (asset) => {
     setSelectedAssetId(asset.maTsDg)
 
@@ -743,7 +758,10 @@ const comparisonToTotalDebt =
           </label>
         </aside>
 
-        <section className="map-panel">
+        <section
+  className="map-panel"
+  id="asset-map-panel"
+>
           <div className="panel-title">
             <div>
               <h2>Bản đồ tài sản</h2>
@@ -755,10 +773,15 @@ const comparisonToTotalDebt =
           </div>
 
           <AssetMap
-            assets={mapAssets}
-            selectedAssetId={selectedAssetId}
-            onViewDetail={handleViewAssetDetail}
-          />
+  assets={mapAssets}
+  selectedAssetId={selectedAssetId}
+  onViewDetail={handleViewAssetDetail}
+  changeType={
+  timeMode === 'Khoảng thời gian'
+    ? changeType
+    : 'Tất cả'
+}
+/>
         </section>
 
         <aside className="ai-panel">
@@ -968,8 +991,8 @@ const comparisonToTotalDebt =
               key={asset.maTsDg}
               id={`asset-row-${asset.maTsDg}`}
               onClick={() =>
-                setSelectedAssetId(asset.maTsDg)
-              }
+  handleSelectAssetFromTable(asset.maTsDg)
+}
               className={
                 selectedAssetId === asset.maTsDg
                   ? 'selected-table-row'
@@ -1021,7 +1044,18 @@ const comparisonToTotalDebt =
 
         <tbody>
           {filteredComparisonAssets.map((item) => (
-            <tr key={item.maTsDg}>
+  <tr
+    key={item.maTsDg}
+    id={`asset-row-${item.maTsDg}`}
+    onClick={() =>
+  handleSelectAssetFromTable(item.maTsDg)
+}
+    className={
+      selectedAssetId === item.maTsDg
+        ? 'selected-table-row'
+        : ''
+    }
+  >
               <td>{item.maTsDg}</td>
 
               <td>
@@ -1054,9 +1088,36 @@ const comparisonToTotalDebt =
               </td>
 
               <td>
-                {item.debtChange >= 0 ? '+' : ''}
-                {formatBillion(item.debtChange)}
-              </td>
+  {(() => {
+    const displayStatus =
+      changeType === 'Phát sinh rủi ro mới'
+        ? 'Phát sinh rủi ro mới'
+        : changeType === 'Phát sinh rủi ro trong khoảng'
+        ? 'Phát sinh rủi ro trong khoảng'
+        : item.changeStatus
+
+    const statusClass =
+      displayStatus === 'Phát sinh mới' ||
+      displayStatus === 'Phát sinh TSBĐ' ||
+      displayStatus === 'Phát sinh rủi ro mới' ||
+      displayStatus === 'Phát sinh rủi ro trong khoảng'
+        ? 'status-new'
+        : displayStatus === 'Tăng GT định giá'
+        ? 'status-up'
+        : displayStatus === 'Giảm GT định giá'
+        ? 'status-down'
+        : displayStatus === 'Giải chấp / không còn TSBĐ' ||
+          displayStatus === 'Không còn cuối kỳ'
+        ? 'status-release'
+        : 'status-stable'
+
+    return (
+      <span className={`change-status ${statusClass}`}>
+        {displayStatus}
+      </span>
+    )
+  })()}
+</td>
 
               <td>
   {(() => {
