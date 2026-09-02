@@ -3,12 +3,20 @@ import './App.css'
 import {
   getAssetsByReportingPeriod,
   getReportingPeriods,
+  getCollateralSnapshotByPeriodAndAsset,
 } from './services/assetService'
+import {
+  readExcelWorkbook,
+  validateWorkbookStructure,
+  validateWorkbookColumns,
+  validateValuationSnapshotRows,
+  extractExcelData,
+  buildCanonicalExcelData,
+} from './services/excelImportService'
 import AssetMap from './components/AssetMap'
 
 function App() {
-    const reportingPeriods = getReportingPeriods()
-
+    
   const [objectType, setObjectType] = useState('Tất cả')
   const [assetGroup, setAssetGroup] = useState('Tất cả')
 const [province, setProvince] = useState('Tất cả')
@@ -21,13 +29,67 @@ const [toPeriod, setToPeriod] = useState('2026-08-31')
 const [changeType, setChangeType] = useState('Tất cả')
   const [selectedAssetId, setSelectedAssetId] = useState(null)
 
-  const periodAssets =
-  getAssetsByReportingPeriod(reportingPeriod)
-  const fromPeriodAssets =
-  getAssetsByReportingPeriod(fromPeriod)
+  const [excelFileInfo, setExcelFileInfo] =
+  useState(null)
 
-  const toPeriodAssets =
-  getAssetsByReportingPeriod(toPeriod)
+  const [
+  importedExcelFileInfo,
+  setImportedExcelFileInfo,
+] = useState(null)
+
+  const [excelReadError, setExcelReadError] =
+  useState('')
+
+  const [
+  excelStructureValidation,
+  setExcelStructureValidation,
+] = useState(null)
+
+const [
+  excelColumnValidation,
+  setExcelColumnValidation,
+] = useState(null)
+const [
+  valuationRowValidation,
+  setValuationRowValidation,
+] = useState(null)
+const [excelImported, setExcelImported] =
+  useState(false)
+  const [pendingExcelData, setPendingExcelData] =
+  useState(null)
+  const [importedExcelData, setImportedExcelData] =
+  useState(null)
+  const [
+  canonicalExcelData,
+  setCanonicalExcelData,
+] = useState(null)
+
+const [showValidationDetails, setShowValidationDetails] =
+  useState(false)
+  const activeDataset =
+  importedExcelData || undefined
+
+const reportingPeriods =
+  getReportingPeriods(
+    activeDataset
+  )
+  const periodAssets =
+  getAssetsByReportingPeriod(
+    reportingPeriod,
+    activeDataset
+  )
+
+const fromPeriodAssets =
+  getAssetsByReportingPeriod(
+    fromPeriod,
+    activeDataset
+  )
+
+const toPeriodAssets =
+  getAssetsByReportingPeriod(
+    toPeriod,
+    activeDataset
+  )
   const baseAssets =
   timeMode === 'Một kỳ'
     ? periodAssets
@@ -127,9 +189,12 @@ const assetsByPeriodInRange =
     ? periodsInRange.map((period) => ({
         period,
         assets:
-          getAssetsByReportingPeriod(period).filter(
-            matchesBaseFilters
-          ),
+  getAssetsByReportingPeriod(
+    period,
+    activeDataset
+  ).filter(
+    matchesBaseFilters
+  ),
       }))
     : []
 
@@ -204,6 +269,19 @@ const comparisonAssets =
           filteredAssets.find(
             (asset) => asset.maTsDg === maTsDg
           )
+          const fromCollateralSnapshot =
+  getCollateralSnapshotByPeriodAndAsset(
+    maTsDg,
+    fromPeriod,
+    activeDataset
+  )
+
+const toCollateralSnapshot =
+  getCollateralSnapshotByPeriodAndAsset(
+    maTsDg,
+    toPeriod,
+    activeDataset
+  )
 
         const fromValuation =
           fromAsset?.gtDinhGia ?? 0
@@ -215,10 +293,14 @@ const comparisonAssets =
           toValuation - fromValuation
 
         const fromDebt =
-          fromAsset?.duNoTsbd ?? 0
+  fromCollateralSnapshot?.duNoTsbd ??
+  fromAsset?.duNoTsbd ??
+  0
 
-        const toDebt =
-          toAsset?.duNoTsbd ?? 0
+const toDebt =
+  toCollateralSnapshot?.duNoTsbd ??
+  toAsset?.duNoTsbd ??
+  0
 
         const debtChange =
           toDebt - fromDebt
@@ -316,33 +398,56 @@ const comparisonAssets =
         }
 
         let changeStatus =
-        'Không thay đổi'
+  'Không thay đổi'
 
-        if (!fromAsset && toAsset) {
-          changeStatus = 'Phát sinh mới'
-        } else if (fromAsset && !toAsset) {
-          changeStatus =
-            'Không còn cuối kỳ'
-        } else if (
-          !fromAsset?.isActiveCollateral &&
-          toAsset?.isActiveCollateral
-        ) {
-          changeStatus =
-            'Phát sinh TSBĐ'
-        } else if (
-          fromAsset?.isActiveCollateral &&
-          toAsset?.trangThaiTsbd ===
-            'Đã giải chấp'
-        ) {
-          changeStatus =
-            'Đã giải chấp'
-        } else if (
-          fromAsset?.isActiveCollateral &&
-          !toAsset?.maTsbd
-        ) {
-          changeStatus =
-            'Không còn xuất hiện trong nguồn'
-        } else if (valuationChange > 0) {
+const fromCollateralActive =
+  fromCollateralSnapshot?.trangThaiTsbd ===
+  'Đang bảo đảm'
+
+const toCollateralActive =
+  toCollateralSnapshot?.trangThaiTsbd ===
+  'Đang bảo đảm'
+
+const toCollateralReleased =
+  toCollateralSnapshot?.trangThaiTsbd ===
+    'Đã giải chấp' &&
+  Boolean(
+    toCollateralSnapshot?.ngayGiaiChap
+  )
+
+if (
+  fromCollateralActive &&
+  toCollateralReleased
+) {
+  changeStatus =
+    'Đã giải chấp'
+} else if (
+  fromCollateralActive &&
+  !toCollateralSnapshot
+) {
+  changeStatus =
+    'Không còn xuất hiện trong nguồn'
+} else if (
+  !fromCollateralSnapshot &&
+  toCollateralActive
+) {
+  changeStatus =
+    'Phát sinh TSBĐ'
+} else if (
+  !fromAsset &&
+  toAsset &&
+  !fromCollateralSnapshot
+) {
+  changeStatus =
+    'Phát sinh mới'
+} else if (
+  fromAsset &&
+  !toAsset &&
+  !toCollateralSnapshot
+) {
+  changeStatus =
+    'Không còn cuối kỳ'
+} else if (valuationChange > 0) {
           changeStatus =
             'Tăng GT định giá'
         } else if (valuationChange < 0) {
@@ -354,6 +459,8 @@ const comparisonAssets =
           maTsDg,
           fromAsset,
           toAsset,
+          fromCollateralSnapshot,
+          toCollateralSnapshot,
 
           fromValuation,
           toValuation,
@@ -538,24 +645,32 @@ const comparisonToTotalValuation =
   )
 
 const comparisonFromTotalCollateralAssets =
-  comparisonFromAssets.filter(
-    (asset) => asset.isActiveCollateral
+  filteredComparisonAssets.filter(
+    (item) =>
+      item.fromCollateralSnapshot
+        ?.trangThaiTsbd ===
+      'Đang bảo đảm'
   ).length
 
 const comparisonToTotalCollateralAssets =
-  comparisonToAssets.filter(
-    (asset) => asset.isActiveCollateral
+  filteredComparisonAssets.filter(
+    (item) =>
+      item.toCollateralSnapshot
+        ?.trangThaiTsbd ===
+      'Đang bảo đảm'
   ).length
 
 const comparisonFromTotalDebt =
-  comparisonFromAssets.reduce(
-    (sum, asset) => sum + asset.duNoTsbd,
+  filteredComparisonAssets.reduce(
+    (sum, item) =>
+      sum + item.fromDebt,
     0
   )
 
 const comparisonToTotalDebt =
-  comparisonToAssets.reduce(
-    (sum, asset) => sum + asset.duNoTsbd,
+  filteredComparisonAssets.reduce(
+    (sum, item) =>
+      sum + item.toDebt,
     0
   )
 
@@ -577,7 +692,146 @@ const comparisonToTotalDebt =
     }
   }, 100)
 }
-  const handleViewAssetDetail = (asset) => {
+const handleExcelFileChange = async (event) => {
+  const file = event.target.files?.[0]
+
+  if (!file) {
+    return
+  }
+
+  try {
+    setExcelReadError('')
+    setExcelStructureValidation(null)
+    setShowValidationDetails(false)
+
+    const result =
+      await readExcelWorkbook(file)
+
+    const structureValidation =
+      validateWorkbookStructure(
+        result.workbook
+      )
+      const columnValidation =
+  validateWorkbookColumns(
+    result.workbook
+  )
+const rowValidation =
+  validateValuationSnapshotRows(
+    result.workbook
+  )
+  const extractedData =
+  extractExcelData(
+    result.workbook
+  )
+
+const canonicalData =
+  buildCanonicalExcelData(
+    extractedData
+  )
+  console.log(
+  'GREENNODE CANONICAL TEST:',
+  canonicalData
+)
+    setExcelFileInfo({
+      fileName: result.fileName,
+      sheetNames: result.sheetNames,
+    })
+
+    setExcelStructureValidation(
+      structureValidation
+    )
+    setExcelColumnValidation(
+  columnValidation
+)
+setValuationRowValidation(
+  rowValidation
+)
+setPendingExcelData(
+  extractedData
+)
+setCanonicalExcelData(
+  canonicalData
+)
+  } catch (error) {
+    console.error(
+      'Không đọc được file Excel:',
+      error
+    )
+
+    setExcelFileInfo(null)
+    setCanonicalExcelData(null)
+    setExcelStructureValidation(null)
+    setExcelColumnValidation(null)
+    setValuationRowValidation(null)
+    setPendingExcelData(null)
+
+    setExcelReadError(
+      'GreenNode không đọc được file Excel này.'
+    )
+  }
+}
+const handleImportExcel = () => {
+  const totalErrors =
+    (excelStructureValidation?.errorCount || 0) +
+    (excelColumnValidation?.errorCount || 0) +
+    (valuationRowValidation?.errorCount || 0)
+
+  if (
+    totalErrors > 0 ||
+    !pendingExcelData ||
+    !canonicalExcelData
+  ) {
+    return
+  }
+
+  setImportedExcelData(
+  canonicalExcelData
+)
+
+setImportedExcelFileInfo(
+  excelFileInfo
+)
+
+setExcelImported(true)
+setShowValidationDetails(false)
+}
+
+const handleClearImportedExcel = () => {
+  setExcelImported(false)
+  setImportedExcelFileInfo(null)
+  setCanonicalExcelData(null)
+  setImportedExcelData(null)
+  setExcelFileInfo(null)
+  setExcelStructureValidation(null)
+  setExcelColumnValidation(null)
+  setValuationRowValidation(null)
+  setPendingExcelData(null)
+  setExcelReadError('')
+  setShowValidationDetails(false)
+  
+}
+const handleRemoveSelectedExcel = () => {
+  setExcelFileInfo(null)
+  setCanonicalExcelData(null)
+  setExcelStructureValidation(null)
+  setExcelColumnValidation(null)
+  setValuationRowValidation(null)
+  setExcelReadError('')
+  setShowValidationDetails(false)
+  setPendingExcelData(null)
+}
+const totalExcelErrors =
+  (excelStructureValidation?.errorCount || 0) +
+  (excelColumnValidation?.errorCount || 0) +
+  (valuationRowValidation?.errorCount || 0)
+
+const totalExcelWarnings =
+  excelStructureValidation?.warningCount || 0
+
+const excelReadyToImport =
+  Boolean(excelFileInfo) &&
+  totalExcelErrors === 0
+const handleViewAssetDetail = (asset) => {
     setSelectedAssetId(asset.maTsDg)
 
     setTimeout(() => {
@@ -810,9 +1064,339 @@ const comparisonToTotalDebt =
         </section>
 
         <aside className="ai-panel">
-          <h2>Trợ lý AI</h2>
+  <h2>Dữ liệu đầu vào</h2>
 
-          <p className="ai-description">
+  <div
+    style={{
+      marginBottom: '10px',
+      fontSize: '12px',
+      fontWeight: '700',
+    }}
+  >
+    <div>
+  Nguồn đang hoạt động:{' '}
+  {excelImported ? 'EXCEL' : 'MOCK'}
+</div>
+
+{excelImported &&
+  importedExcelFileInfo && (
+    <div
+      style={{
+        marginTop: '4px',
+        fontWeight: '400',
+        wordBreak: 'break-word',
+      }}
+    >
+      {importedExcelFileInfo.fileName}
+    </div>
+  )}
+  </div>
+
+  <label
+    htmlFor="excel-file-input"
+    style={{
+      display: 'block',
+      padding: '10px 14px',
+      marginBottom: '10px',
+      background: '#ffffff',
+      border: '1px solid #cbd5e1',
+      borderRadius: '8px',
+      cursor: 'pointer',
+      textAlign: 'center',
+      fontWeight: '600',
+    }}
+  >
+    📂 Chọn file Excel
+
+    <input
+      id="excel-file-input"
+      type="file"
+      accept=".xlsx,.xls"
+      onChange={handleExcelFileChange}
+      style={{
+        display: 'none',
+      }}
+    />
+    </label>
+
+  {excelFileInfo && (
+    <div
+      style={{
+        padding: '10px',
+        border: '1px solid #cbd5e1',
+        borderRadius: '8px',
+        fontSize: '12px',
+        background: '#f8fafc',
+      }}
+    >
+      <div
+        style={{
+          fontWeight: '700',
+          wordBreak: 'break-word',
+          marginBottom: '8px',
+        }}
+      >
+        <div
+  style={{
+    fontSize: '11px',
+    fontWeight: '600',
+    marginBottom: '4px',
+  }}
+>
+  File đang kiểm tra:
+</div>
+        {excelFileInfo.fileName}
+      </div>
+
+      {canonicalExcelData && (
+      <div
+        style={{
+          marginBottom: '8px',
+          fontSize: '12px',
+          lineHeight: '1.5',
+        }}
+      >
+        <div
+          style={{
+            fontWeight: '700',
+            marginBottom: '4px',
+          }}
+        >
+          Đã chuẩn hóa:
+        </div>
+
+        <div>
+          {canonicalExcelData.valuationAssets.length}{' '}
+          tài sản
+        </div>
+
+        <div>
+          {canonicalExcelData.valuationSnapshots.length}{' '}
+          snapshot định giá
+        </div>
+
+        <div>
+          {canonicalExcelData.collateralSnapshots.length}{' '}
+          snapshot TSBĐ
+        </div>
+
+        <div>
+          {canonicalExcelData.valuationRisks.length}{' '}
+          rủi ro
+        </div>
+
+        <div>
+          {canonicalExcelData.customers.length}{' '}
+          khách hàng
+        </div>
+
+        <div>
+          {canonicalExcelData.collateralCustomers.length}{' '}
+          quan hệ TSBĐ-KH
+        </div>
+      </div>
+    )}
+
+    {excelReadyToImport ? (
+        <div>
+          <div
+            style={{
+              fontWeight: '700',
+              marginBottom: '4px',
+            }}
+          >
+            ✅ Dữ liệu hợp lệ
+          </div>
+
+          <div>
+            ERROR: {totalExcelErrors}
+            {' | '}
+            WARNING: {totalExcelWarnings}
+          </div>
+        </div>
+      ) : (
+        <div>
+          <div
+            style={{
+              fontWeight: '700',
+              marginBottom: '4px',
+            }}
+          >
+            ❌ Chưa thể Import
+          </div>
+
+          <div>
+            ERROR: {totalExcelErrors}
+            {' | '}
+            WARNING: {totalExcelWarnings}
+          </div>
+        </div>
+      )}
+
+      {(totalExcelErrors > 0 ||
+  totalExcelWarnings > 0) && (
+  <button
+    type="button"
+    onClick={() =>
+      setShowValidationDetails(
+        !showValidationDetails
+      )
+    }
+    style={{
+      width: '100%',
+      marginTop: '10px',
+    }}
+  >
+    {showValidationDetails
+      ? 'Ẩn chi tiết'
+      : 'Xem chi tiết lỗi'}
+  </button>
+)}
+
+{!excelImported && (
+  <button
+    type="button"
+    onClick={handleRemoveSelectedExcel}
+    style={{
+      width: '100%',
+      marginTop: '8px',
+    }}
+  >
+    Bỏ file đã chọn
+  </button>
+)}
+
+      {showValidationDetails && (
+        <div
+          style={{
+            marginTop: '10px',
+            paddingTop: '8px',
+            borderTop:
+              '1px solid #e2e8f0',
+          }}
+        >
+          {excelStructureValidation?.results
+            .filter(
+              (item) =>
+                item.status !== 'PASS'
+            )
+            .map((item) => (
+              <div
+                key={`sheet-${item.sheetName}`}
+                style={{
+                  marginBottom: '6px',
+                }}
+              >
+                {item.status === 'ERROR'
+                  ? '❌'
+                  : '⚠️'}{' '}
+                {item.sheetName}
+                <div>{item.message}</div>
+              </div>
+            ))}
+
+          {excelColumnValidation?.results
+            .filter(
+              (item) =>
+                item.status !== 'PASS'
+            )
+            .map((item) => (
+              <div
+                key={`column-${item.sheetName}-${item.columnName}`}
+                style={{
+                  marginBottom: '6px',
+                }}
+              >
+                ❌ {item.sheetName}
+                {' → '}
+                {item.columnName}
+                <div>{item.message}</div>
+              </div>
+            ))}
+
+          {valuationRowValidation?.results.map(
+            (item, index) => (
+              <div
+                key={`row-${item.code}-${item.excelRow}-${index}`}
+                style={{
+                  marginBottom: '6px',
+                }}
+              >
+                ❌ {item.code}
+                {' | '}
+                {item.sheetName}
+                {' | '}
+                Dòng {item.excelRow}
+                {' | '}
+                {item.columnName}
+
+                <div>{item.message}</div>
+              </div>
+            )
+          )}
+        </div>
+      )}
+
+      {excelReadyToImport &&
+        !excelImported && (
+          <button
+            type="button"
+            onClick={handleImportExcel}
+            style={{
+              width: '100%',
+              marginTop: '10px',
+              fontWeight: '700',
+            }}
+          >
+            Import dữ liệu
+          </button>
+        )}
+
+      {excelImported && (
+        <div
+          style={{
+            marginTop: '10px',
+          }}
+        >
+          <div
+            style={{
+              fontWeight: '700',
+              marginBottom: '8px',
+            }}
+          >
+            ✅ Dữ liệu EXCEL đang hoạt động
+          </div>
+
+          <button
+            type="button"
+            onClick={handleClearImportedExcel}
+            style={{
+              width: '100%',
+            }}
+          >
+            Xóa dữ liệu đã Import
+          </button>
+        </div>
+      )}
+    </div>
+  )}
+
+  {excelReadError && (
+    <div
+      style={{
+        marginTop: '10px',
+        fontSize: '12px',
+      }}
+    >
+      ❌ {excelReadError}
+    </div>
+  )}
+
+  <hr />
+
+  <h2>Trợ lý AI</h2>
+
+            <p className="ai-description">
             AI Query sẽ được kết nối ở giai đoạn sau.
           </p>
 
@@ -908,7 +1492,7 @@ const comparisonToTotalDebt =
     {timeMode === 'Một kỳ' ? (
       <>
         <strong>{totalCollateralAssets}</strong>
-        <small>Có mã TSBĐ</small>
+        <small>Đang bảo đảm</small>
       </>
     ) : (
       <>
@@ -1101,13 +1685,13 @@ const comparisonToTotalDebt =
               </td>
 
               <td>
-  {item.fromAsset?.maTsbd
+  {item.fromCollateralSnapshot
     ? formatBillion(item.fromDebt)
     : '-'}
 </td>
 
 <td>
-  {item.toAsset?.maTsbd
+  {item.toCollateralSnapshot
     ? formatBillion(item.toDebt)
     : '-'}
 </td>

@@ -1,111 +1,179 @@
-import { customers } from '../data/customers'
-import { valuationSnapshots } from '../data/valuationSnapshots'
-import { valuationAssets } from '../data/valuationAssets'
-import { collateralAssets } from '../data/collateralAssets'
-import { valuationRisks } from '../data/valuationRisks'
-import { collateralSnapshots } from '../data/collateralSnapshots'
-import { collateralCustomers } from '../data/collateralCustomers'
+import { customers as mockCustomers } from '../data/customers'
+import { valuationSnapshots as mockValuationSnapshots } from '../data/valuationSnapshots'
+import { valuationAssets as mockValuationAssets } from '../data/valuationAssets'
+import { collateralAssets as mockCollateralAssets } from '../data/collateralAssets'
+import { valuationRisks as mockValuationRisks } from '../data/valuationRisks'
+import { collateralSnapshots as mockCollateralSnapshots } from '../data/collateralSnapshots'
+import { collateralCustomers as mockCollateralCustomers } from '../data/collateralCustomers'
 
 
-export function getAssets() {
-  return valuationAssets.map((valuationAsset) => {
-    const collateral = collateralAssets.find(
-      (item) =>
-        item.valuationRecordId === valuationAsset.recordId
-    )
-const customerRelations = collateral
-  ? collateralCustomers.filter(
-      (item) =>
-        item.collateralRecordId === collateral.recordId
-    )
-  : []
-  const customerDetails = customerRelations.map(
-  (relation) => {
-    const customer = customers.find(
-      (item) =>
-        item.cif === relation.cif
-    )
+/*
+ * Bộ dữ liệu mặc định của GreenNode.
+ *
+ * Nếu App không truyền dataset vào,
+ * assetService vẫn dùng MOCK như hiện tại.
+ */
+const MOCK_DATASET = {
+  valuationAssets: mockValuationAssets,
+  valuationSnapshots: mockValuationSnapshots,
+  collateralAssets: mockCollateralAssets,
+  collateralSnapshots: mockCollateralSnapshots,
+  valuationRisks: mockValuationRisks,
+  customers: mockCustomers,
+  collateralCustomers: mockCollateralCustomers,
+}
 
-    return {
-      ...relation,
-      tenKhachHang:
-        customer?.tenKhachHang ?? null,
-      loaiKhachHang:
-        customer?.loaiKhachHang ?? null,
+
+export function getAssets(
+  dataset = MOCK_DATASET
+) {
+  const {
+    valuationAssets = [],
+    collateralAssets = [],
+    collateralCustomers = [],
+    customers = [],
+    valuationRisks = [],
+  } = dataset
+
+  return valuationAssets.map(
+    (valuationAsset) => {
+      const collateral =
+        collateralAssets.find(
+          (item) =>
+            item.valuationRecordId ===
+            valuationAsset.recordId
+        )
+
+      const customerRelations =
+        collateral
+          ? collateralCustomers.filter(
+              (item) =>
+                item.collateralRecordId ===
+                collateral.recordId
+            )
+          : []
+
+      const customerDetails =
+        customerRelations.map(
+          (relation) => {
+            const customer =
+              customers.find(
+                (item) =>
+                  item.cif === relation.cif
+              )
+
+            return {
+              ...relation,
+
+              tenKhachHang:
+                customer?.tenKhachHang ??
+                null,
+
+              loaiKhachHang:
+                customer?.loaiKhachHang ??
+                null,
+            }
+          }
+        )
+
+      const risks =
+        valuationRisks.filter(
+          (item) =>
+            item.valuationRecordId ===
+            valuationAsset.recordId
+        )
+
+      const ltv =
+        collateral &&
+        valuationAsset.gtDinhGia > 0
+          ? collateral.gtBaoDam /
+            valuationAsset.gtDinhGia
+          : null
+
+      return {
+        ...valuationAsset,
+
+        maTsbd:
+          collateral?.maTsbd ?? null,
+
+        cifs:
+          customerRelations.map(
+            (item) => item.cif
+          ),
+
+        customers: customerDetails,
+
+        ngayNhanTsbd:
+          collateral?.ngayNhanTsbd ??
+          null,
+
+        gtBaoDam:
+          collateral?.gtBaoDam ?? 0,
+
+        duNoTsbd:
+          collateral?.duNoTsbd ?? 0,
+
+        ltv,
+
+        thanhKhoan:
+          collateral?.thanhKhoan ??
+          null,
+
+        trangThaiTsbd:
+          collateral?.trangThaiTsbd ??
+          null,
+
+        ngayGiaiChap:
+          collateral?.ngayGiaiChap ??
+          null,
+
+        donViQuanLy:
+          collateral?.donViQuanLy ??
+          null,
+
+        risks,
+
+        coRuiRoDinhGia:
+          risks.length > 0,
+      }
     }
-  }
-)
-    const risks = valuationRisks.filter(
-  (item) =>
-    item.valuationRecordId ===
-    valuationAsset.recordId
-)
-
-    const ltv =
-      collateral && valuationAsset.gtDinhGia > 0
-        ? collateral.gtBaoDam /
-          valuationAsset.gtDinhGia
-        : null
-
-    return {
-      ...valuationAsset,
-
-      maTsbd: collateral?.maTsbd ?? null,
-      cifs: customerRelations.map(
-  (item) => item.cif
-),
-customers: customerDetails,
-      ngayNhanTsbd:
-        collateral?.ngayNhanTsbd ?? null,
-
-      gtBaoDam:
-        collateral?.gtBaoDam ?? 0,
-
-      duNoTsbd:
-        collateral?.duNoTsbd ?? 0,
-
-      ltv,
-
-      thanhKhoan:
-        collateral?.thanhKhoan ?? null,
-
-      trangThaiTsbd:
-        collateral?.trangThaiTsbd ?? null,
-
-      ngayGiaiChap:
-        collateral?.ngayGiaiChap ?? null,
-
-      donViQuanLy:
-        collateral?.donViQuanLy ?? null,
-
-      risks,
-      coRuiRoDinhGia: risks.length > 0,
-    }
-  })
+  )
 }
 
 
 export function getAssetById(
   maTsDg,
-  kyBaoCao = null
+  kyBaoCao = null,
+  dataset = MOCK_DATASET
 ) {
   if (kyBaoCao) {
     return getAssetsByReportingPeriod(
-      kyBaoCao
+      kyBaoCao,
+      dataset
     ).find(
       (asset) =>
         asset.maTsDg === maTsDg
     )
   }
 
-  return getAssets().find(
+  return getAssets(
+    dataset
+  ).find(
     (asset) =>
       asset.maTsDg === maTsDg
   )
 }
 
 
-export function getReportingPeriods() {
+export function getReportingPeriods(
+  dataset = MOCK_DATASET
+) {
+  const {
+    valuationSnapshots = [],
+    collateralSnapshots = [],
+    valuationRisks = [],
+  } = dataset
+
   const periods = [
     ...valuationSnapshots.map(
       (item) => item.kyBaoCao
@@ -118,16 +186,29 @@ export function getReportingPeriods() {
     ...valuationRisks.map(
       (item) => item.kyBaoCao
     ),
-  ]
+  ].filter(Boolean)
 
-  return [...new Set(periods)].sort()
+  return [
+    ...new Set(periods),
+  ].sort()
 }
 
 
 export function getAssetsByReportingPeriod(
-  kyBaoCao
+  kyBaoCao,
+  dataset = MOCK_DATASET
 ) {
-  const assets = getAssets()
+  const {
+    valuationSnapshots = [],
+    collateralAssets = [],
+    collateralSnapshots = [],
+    valuationRisks = [],
+    collateralCustomers = [],
+    customers = [],
+  } = dataset
+
+  const assets =
+    getAssets(dataset)
 
   const periodValuationSnapshots =
     valuationSnapshots.filter(
@@ -149,12 +230,12 @@ export function getAssetsByReportingPeriod(
       }
 
       const periodRisks =
-  valuationRisks.filter(
-    (item) =>
-      item.kyBaoCao === kyBaoCao &&
-      item.valuationRecordId ===
-        asset.recordId
-  )
+        valuationRisks.filter(
+          (item) =>
+            item.kyBaoCao === kyBaoCao &&
+            item.valuationRecordId ===
+              asset.recordId
+        )
 
       const collateral =
         collateralAssets.find(
@@ -162,48 +243,65 @@ export function getAssetsByReportingPeriod(
             item.valuationRecordId ===
             asset.recordId
         )
-const periodCustomers = collateral
-  ? collateralCustomers.filter(
-      (item) =>
-        item.collateralRecordId ===
-          collateral.recordId &&
-        item.tuNgay <= kyBaoCao &&
-        (
-          item.denNgay === null ||
-          item.denNgay >= kyBaoCao
-        )
-    )
-  : []
-  const periodCustomerDetails =
-  periodCustomers.map((relation) => {
-    const customer = customers.find(
-      (item) =>
-        item.cif === relation.cif
-    )
 
-    return {
-      ...relation,
-      tenKhachHang:
-        customer?.tenKhachHang ?? null,
-      loaiKhachHang:
-        customer?.loaiKhachHang ?? null,
-    }
-  })
-      const snapshot = collateral
-        ? collateralSnapshots.find(
-            (item) =>
-              item.kyBaoCao ===
-                kyBaoCao &&
-              item.collateralRecordId ===
-                collateral.recordId
-          )
-        : null
+      const periodCustomers =
+        collateral
+          ? collateralCustomers.filter(
+              (item) =>
+                item.collateralRecordId ===
+                  collateral.recordId &&
+                (
+                  item.tuNgay === null ||
+                  item.tuNgay === undefined ||
+                  item.tuNgay <= kyBaoCao
+                ) &&
+                (
+                  item.denNgay === null ||
+                  item.denNgay === undefined ||
+                  item.denNgay >= kyBaoCao
+                )
+            )
+          : []
+
+      const periodCustomerDetails =
+        periodCustomers.map(
+          (relation) => {
+            const customer =
+              customers.find(
+                (item) =>
+                  item.cif === relation.cif
+              )
+
+            return {
+              ...relation,
+
+              tenKhachHang:
+                customer?.tenKhachHang ??
+                null,
+
+              loaiKhachHang:
+                customer?.loaiKhachHang ??
+                null,
+            }
+          }
+        )
+
+      const snapshot =
+        collateral
+          ? collateralSnapshots.find(
+              (item) =>
+                item.kyBaoCao ===
+                  kyBaoCao &&
+                item.collateralRecordId ===
+                  collateral.recordId
+            )
+          : null
 
       /*
        * Không có snapshot TSBĐ tại kỳ này:
        * tài sản vẫn tồn tại trong dữ liệu định giá,
-       * nhưng không được mang dữ liệu TSBĐ
-       * hiện tại ngược về kỳ quá khứ.
+       * nhưng không mang dữ liệu TSBĐ
+       * của kỳ khác sang.
        */
       if (!snapshot) {
         return {
@@ -211,15 +309,18 @@ const periodCustomers = collateral
 
           gtDinhGia:
             valuationSnapshot.gtDinhGia,
-            ngayDinhGia:
+
+          ngayDinhGia:
             valuationSnapshot.ngayDinhGia,
 
-            donViDinhGia:
-             valuationSnapshot.donViDinhGia,
+          donViDinhGia:
+            valuationSnapshot.donViDinhGia,
 
           maTsbd: null,
+
           cifs: [],
           customers: [],
+
           ngayNhanTsbd: null,
 
           gtBaoDam: 0,
@@ -230,10 +331,11 @@ const periodCustomers = collateral
           trangThaiTsbd: null,
           ngayGiaiChap: null,
           donViQuanLy: null,
-          
+
           isActiveCollateral: false,
 
           risks: periodRisks,
+
           coRuiRoDinhGia:
             periodRisks.length > 0,
         }
@@ -241,10 +343,8 @@ const periodCustomers = collateral
 
       /*
        * Có snapshot TSBĐ:
-       * GT định giá lấy đúng kỳ định giá.
-       * GT bảo đảm / dư nợ / thanh khoản /
-       * trạng thái / đơn vị quản lý
-       * lấy đúng snapshot TSBĐ cùng kỳ.
+       * định giá lấy đúng kỳ,
+       * TSBĐ lấy đúng snapshot cùng kỳ.
        */
       const ltv =
         valuationSnapshot.gtDinhGia > 0
@@ -258,16 +358,27 @@ const periodCustomers = collateral
         gtDinhGia:
           valuationSnapshot.gtDinhGia,
 
+        ngayDinhGia:
+          valuationSnapshot.ngayDinhGia,
+
+        donViDinhGia:
+          valuationSnapshot.donViDinhGia,
+
         maTsbd:
           snapshot.maTsbd,
 
-       cifs: periodCustomers.map(
-  (item) => item.cif
-),
-customers: periodCustomerDetails,
+        cifs:
+          periodCustomers.map(
+            (item) => item.cif
+          ),
+
+        customers:
+          periodCustomerDetails,
 
         ngayNhanTsbd:
-          collateral?.ngayNhanTsbd ?? null,
+          snapshot.ngayNhanTsbd ??
+          collateral?.ngayNhanTsbd ??
+          null,
 
         gtBaoDam:
           snapshot.gtBaoDam,
@@ -281,24 +392,42 @@ customers: periodCustomerDetails,
           snapshot.thanhKhoan,
 
         trangThaiTsbd:
-         snapshot.trangThaiTsbd,
+          snapshot.trangThaiTsbd,
 
         ngayGiaiChap:
           snapshot.ngayGiaiChap ??
           collateral?.ngayGiaiChap ??
           null,
 
-          isActiveCollateral:
-            snapshot.trangThaiTsbd ===
-            'Đang bảo đảm',
+        isActiveCollateral:
+          snapshot.trangThaiTsbd ===
+          'Đang bảo đảm',
 
         donViQuanLy:
           snapshot.donViQuanLy,
 
         risks: periodRisks,
+
         coRuiRoDinhGia:
           periodRisks.length > 0,
       }
     })
     .filter(Boolean)
+}
+export function getCollateralSnapshotByPeriodAndAsset(
+  maTsDg,
+  kyBaoCao,
+  dataset = MOCK_DATASET
+) {
+  const {
+    collateralSnapshots = [],
+  } = dataset
+
+  return (
+    collateralSnapshots.find(
+      (item) =>
+        item.maTsDg === maTsDg &&
+        item.kyBaoCao === kyBaoCao
+    ) || null
+  )
 }
