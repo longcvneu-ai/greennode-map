@@ -35,9 +35,15 @@ const [changeType, setChangeType] = useState('Tất cả')
 
 const matchesBaseFilters = (asset) => {
   const matchObjectType =
-    objectType === 'Tất cả' ||
-    (objectType === 'Chỉ TS định giá' && !asset.maTsbd) ||
-    (objectType === 'TSBĐ' && Boolean(asset.maTsbd))
+  objectType === 'Tất cả' ||
+  (
+    objectType === 'TSBĐ đang bảo đảm' &&
+    asset.isActiveCollateral
+  ) ||
+  (
+    objectType === 'Không phải TSBĐ đang bảo đảm' &&
+    !asset.isActiveCollateral
+  )
 
   const matchAssetGroup =
     assetGroup === 'Tất cả' ||
@@ -135,7 +141,7 @@ const totalValuation = filteredAssets.reduce(
 )
 
 const totalCollateralAssets = filteredAssets.filter(
-  (asset) => asset.maTsbd
+  (asset) => asset.isActiveCollateral
 ).length
 
 const totalCollateralDebt = filteredAssets.reduce(
@@ -154,7 +160,7 @@ const fromTotalValuation =
 
 const fromTotalCollateralAssets =
   filteredFromPeriodAssets.filter(
-    (asset) => asset.maTsbd
+    (asset) => asset.isActiveCollateral
   ).length
 
 const fromTotalCollateralDebt =
@@ -310,7 +316,7 @@ const comparisonAssets =
         }
 
         let changeStatus =
-          'Không thay đổi'
+        'Không thay đổi'
 
         if (!fromAsset && toAsset) {
           changeStatus = 'Phát sinh mới'
@@ -318,17 +324,24 @@ const comparisonAssets =
           changeStatus =
             'Không còn cuối kỳ'
         } else if (
-          !fromAsset?.maTsbd &&
-          toAsset?.maTsbd
+          !fromAsset?.isActiveCollateral &&
+          toAsset?.isActiveCollateral
         ) {
           changeStatus =
             'Phát sinh TSBĐ'
         } else if (
-          fromAsset?.maTsbd &&
+          fromAsset?.isActiveCollateral &&
+          toAsset?.trangThaiTsbd ===
+            'Đã giải chấp'
+        ) {
+          changeStatus =
+            'Đã giải chấp'
+        } else if (
+          fromAsset?.isActiveCollateral &&
           !toAsset?.maTsbd
         ) {
           changeStatus =
-            'Giải chấp / không còn TSBĐ'
+            'Không còn xuất hiện trong nguồn'
         } else if (valuationChange > 0) {
           changeStatus =
             'Tăng GT định giá'
@@ -472,13 +485,24 @@ const filteredComparisonAssets =
     }
 
     if (changeType === 'Giải chấp') {
-      return (
-        item.fromAsset?.maTsbd &&
-        !item.toAsset?.maTsbd
-      )
-    }
+  return (
+    item.fromAsset?.isActiveCollateral &&
+    item.toAsset?.trangThaiTsbd ===
+      'Đã giải chấp'
+  )
+}
 
-    return true
+if (
+  changeType ===
+  'Không còn xuất hiện trong nguồn'
+) {
+  return (
+    item.changeStatus ===
+    'Không còn xuất hiện trong nguồn'
+  )
+}
+
+return true
   })
           const mapAssets =
   timeMode === 'Một kỳ'
@@ -515,12 +539,12 @@ const comparisonToTotalValuation =
 
 const comparisonFromTotalCollateralAssets =
   comparisonFromAssets.filter(
-    (asset) => asset.maTsbd
+    (asset) => asset.isActiveCollateral
   ).length
 
 const comparisonToTotalCollateralAssets =
   comparisonToAssets.filter(
-    (asset) => asset.maTsbd
+    (asset) => asset.isActiveCollateral
   ).length
 
 const comparisonFromTotalDebt =
@@ -678,6 +702,7 @@ const comparisonToTotalDebt =
     <option>Dư nợ tăng</option>
     <option>Dư nợ giảm</option>
     <option>Giải chấp</option>
+    <option>Không còn xuất hiện trong nguồn</option>
     <option>Phát sinh rủi ro mới</option>
     <option>Phát sinh rủi ro trong khoảng</option>
   </select>
@@ -694,8 +719,8 @@ const comparisonToTotalDebt =
               }
             >
               <option>Tất cả</option>
-              <option>Chỉ TS định giá</option>
-              <option>TSBĐ</option>
+              <option>TSBĐ đang bảo đảm</option>
+              <option>Không phải TSBĐ đang bảo đảm</option>
             </select>
           </label>
 
@@ -1076,79 +1101,63 @@ const comparisonToTotalDebt =
               </td>
 
               <td>
-                {item.fromAsset?.maTsbd
-                  ? formatBillion(item.fromDebt)
-                  : '-'}
-              </td>
+  {item.fromAsset?.maTsbd
+    ? formatBillion(item.fromDebt)
+    : '-'}
+</td>
 
-              <td>
-                {item.toAsset?.maTsbd
-                  ? formatBillion(item.toDebt)
-                  : '-'}
-              </td>
+<td>
+  {item.toAsset?.maTsbd
+    ? formatBillion(item.toDebt)
+    : '-'}
+</td>
 
-              <td>
+<td>
+  {item.debtChange >= 0 ? '+' : ''}
+  {formatBillion(item.debtChange)}
+</td>
+
+<td>
   {(() => {
     const displayStatus =
       changeType === 'Phát sinh rủi ro mới'
         ? 'Phát sinh rủi ro mới'
-        : changeType === 'Phát sinh rủi ro trong khoảng'
+        : changeType ===
+          'Phát sinh rủi ro trong khoảng'
         ? 'Phát sinh rủi ro trong khoảng'
         : item.changeStatus
 
     const statusClass =
       displayStatus === 'Phát sinh mới' ||
       displayStatus === 'Phát sinh TSBĐ' ||
-      displayStatus === 'Phát sinh rủi ro mới' ||
-      displayStatus === 'Phát sinh rủi ro trong khoảng'
+      displayStatus ===
+        'Phát sinh rủi ro mới' ||
+      displayStatus ===
+        'Phát sinh rủi ro trong khoảng'
         ? 'status-new'
-        : displayStatus === 'Tăng GT định giá'
+        : displayStatus ===
+            'Tăng GT định giá'
         ? 'status-up'
-        : displayStatus === 'Giảm GT định giá'
+        : displayStatus ===
+            'Giảm GT định giá'
         ? 'status-down'
-        : displayStatus === 'Giải chấp / không còn TSBĐ' ||
-          displayStatus === 'Không còn cuối kỳ'
+        : displayStatus ===
+            'Đã giải chấp' ||
+          displayStatus ===
+            'Không còn xuất hiện trong nguồn' ||
+          displayStatus ===
+            'Không còn cuối kỳ'
         ? 'status-release'
         : 'status-stable'
 
     return (
-      <span className={`change-status ${statusClass}`}>
+      <span
+        className={`change-status ${statusClass}`}
+      >
         {displayStatus}
       </span>
     )
   })()}
-</td>
-
-              <td>
-  {(() => {
-  const displayStatus =
-    changeType === 'Phát sinh rủi ro mới'
-      ? 'Phát sinh rủi ro mới'
-      : changeType === 'Phát sinh rủi ro trong khoảng'
-      ? 'Phát sinh rủi ro trong khoảng'
-      : item.changeStatus
-
-  const statusClass =
-    displayStatus === 'Phát sinh mới' ||
-    displayStatus === 'Phát sinh TSBĐ' ||
-    displayStatus === 'Phát sinh rủi ro mới' ||
-    displayStatus === 'Phát sinh rủi ro trong khoảng'
-      ? 'status-new'
-      : displayStatus === 'Tăng GT định giá'
-      ? 'status-up'
-      : displayStatus === 'Giảm GT định giá'
-      ? 'status-down'
-      : displayStatus === 'Giải chấp / không còn TSBĐ' ||
-        displayStatus === 'Không còn cuối kỳ'
-      ? 'status-release'
-      : 'status-stable'
-
-  return (
-    <span className={`change-status ${statusClass}`}>
-      {displayStatus}
-    </span>
-  )
-})()}
 </td>
             </tr>
           ))}

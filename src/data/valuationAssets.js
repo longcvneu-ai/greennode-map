@@ -1,9 +1,11 @@
+import { generateValuationAssets } from './mockDataGenerator'
 export const valuationAssets = [
   {
     recordId: 'VAL_REC_001',
     assetLinkId: null,
 
     maTsDg: 'DG001',
+    tenTaiSan: 'Nhà đất Hà Nội 001',
     nhomTsCap1: 'BĐS',
     loaiTsCap2: 'Nhà đất',
     moTaTs: 'Nhà đất tại Hà Nội',
@@ -25,6 +27,7 @@ export const valuationAssets = [
     assetLinkId: null,
 
     maTsDg: 'DG002',
+    tenTaiSan: 'Căn hộ Hà Nội 001',
     nhomTsCap1: 'BĐS',
     loaiTsCap2: 'CHCC',
     moTaTs: 'Căn hộ chung cư tại Hà Nội',
@@ -46,6 +49,7 @@ export const valuationAssets = [
     assetLinkId: null,
 
     maTsDg: 'DG003',
+    tenTaiSan: 'Nhà đất TP.HCM 001',
     nhomTsCap1: 'BĐS',
     loaiTsCap2: 'Nhà đất',
     moTaTs: 'Nhà đất tại TP.HCM',
@@ -67,6 +71,7 @@ export const valuationAssets = [
     assetLinkId: null,
 
     maTsDg: 'DG004',
+    tenTaiSan: 'Ô tô Hà Nội 001',
     nhomTsCap1: 'Động sản',
     loaiTsCap2: 'Ô tô',
     moTaTs: 'Ô tô quản lý tại Hà Nội',
@@ -88,6 +93,7 @@ export const valuationAssets = [
     assetLinkId: null,
 
     maTsDg: 'DG005',
+    tenTaiSan: 'Hàng hóa TP.HCM 001',
     nhomTsCap1: 'Động sản',
     loaiTsCap2: 'Hàng hóa',
     moTaTs: 'Hàng hóa quản lý tại TP.HCM',
@@ -103,4 +109,5 @@ export const valuationAssets = [
     longitude: 106.6297,
     doChinhXacViTri: 'Điểm quản lý',
   },
+  ...generateValuationAssets(),
 ]

@@ -1,8 +1,10 @@
+import { customers } from '../data/customers'
 import { valuationSnapshots } from '../data/valuationSnapshots'
 import { valuationAssets } from '../data/valuationAssets'
 import { collateralAssets } from '../data/collateralAssets'
 import { valuationRisks } from '../data/valuationRisks'
 import { collateralSnapshots } from '../data/collateralSnapshots'
+import { collateralCustomers } from '../data/collateralCustomers'
 
 
 export function getAssets() {
@@ -11,11 +13,33 @@ export function getAssets() {
       (item) =>
         item.valuationRecordId === valuationAsset.recordId
     )
-
-    const risks = valuationRisks.filter(
+const customerRelations = collateral
+  ? collateralCustomers.filter(
       (item) =>
-        item.maTsDg === valuationAsset.maTsDg
+        item.collateralRecordId === collateral.recordId
     )
+  : []
+  const customerDetails = customerRelations.map(
+  (relation) => {
+    const customer = customers.find(
+      (item) =>
+        item.cif === relation.cif
+    )
+
+    return {
+      ...relation,
+      tenKhachHang:
+        customer?.tenKhachHang ?? null,
+      loaiKhachHang:
+        customer?.loaiKhachHang ?? null,
+    }
+  }
+)
+    const risks = valuationRisks.filter(
+  (item) =>
+    item.valuationRecordId ===
+    valuationAsset.recordId
+)
 
     const ltv =
       collateral && valuationAsset.gtDinhGia > 0
@@ -27,7 +51,10 @@ export function getAssets() {
       ...valuationAsset,
 
       maTsbd: collateral?.maTsbd ?? null,
-      cif: collateral?.cif ?? null,
+      cifs: customerRelations.map(
+  (item) => item.cif
+),
+customers: customerDetails,
       ngayNhanTsbd:
         collateral?.ngayNhanTsbd ?? null,
 
@@ -122,11 +149,12 @@ export function getAssetsByReportingPeriod(
       }
 
       const periodRisks =
-        valuationRisks.filter(
-          (item) =>
-            item.kyBaoCao === kyBaoCao &&
-            item.maTsDg === asset.maTsDg
-        )
+  valuationRisks.filter(
+    (item) =>
+      item.kyBaoCao === kyBaoCao &&
+      item.valuationRecordId ===
+        asset.recordId
+  )
 
       const collateral =
         collateralAssets.find(
@@ -134,7 +162,33 @@ export function getAssetsByReportingPeriod(
             item.valuationRecordId ===
             asset.recordId
         )
+const periodCustomers = collateral
+  ? collateralCustomers.filter(
+      (item) =>
+        item.collateralRecordId ===
+          collateral.recordId &&
+        item.tuNgay <= kyBaoCao &&
+        (
+          item.denNgay === null ||
+          item.denNgay >= kyBaoCao
+        )
+    )
+  : []
+  const periodCustomerDetails =
+  periodCustomers.map((relation) => {
+    const customer = customers.find(
+      (item) =>
+        item.cif === relation.cif
+    )
 
+    return {
+      ...relation,
+      tenKhachHang:
+        customer?.tenKhachHang ?? null,
+      loaiKhachHang:
+        customer?.loaiKhachHang ?? null,
+    }
+  })
       const snapshot = collateral
         ? collateralSnapshots.find(
             (item) =>
@@ -157,9 +211,15 @@ export function getAssetsByReportingPeriod(
 
           gtDinhGia:
             valuationSnapshot.gtDinhGia,
+            ngayDinhGia:
+            valuationSnapshot.ngayDinhGia,
+
+            donViDinhGia:
+             valuationSnapshot.donViDinhGia,
 
           maTsbd: null,
-          cif: null,
+          cifs: [],
+          customers: [],
           ngayNhanTsbd: null,
 
           gtBaoDam: 0,
@@ -170,6 +230,8 @@ export function getAssetsByReportingPeriod(
           trangThaiTsbd: null,
           ngayGiaiChap: null,
           donViQuanLy: null,
+          
+          isActiveCollateral: false,
 
           risks: periodRisks,
           coRuiRoDinhGia:
@@ -199,8 +261,10 @@ export function getAssetsByReportingPeriod(
         maTsbd:
           snapshot.maTsbd,
 
-        cif:
-          collateral?.cif ?? null,
+       cifs: periodCustomers.map(
+  (item) => item.cif
+),
+customers: periodCustomerDetails,
 
         ngayNhanTsbd:
           collateral?.ngayNhanTsbd ?? null,
@@ -217,10 +281,16 @@ export function getAssetsByReportingPeriod(
           snapshot.thanhKhoan,
 
         trangThaiTsbd:
-          snapshot.trangThaiTsbd,
+         snapshot.trangThaiTsbd,
 
         ngayGiaiChap:
-          collateral?.ngayGiaiChap ?? null,
+          snapshot.ngayGiaiChap ??
+          collateral?.ngayGiaiChap ??
+          null,
+
+          isActiveCollateral:
+            snapshot.trangThaiTsbd ===
+            'Đang bảo đảm',
 
         donViQuanLy:
           snapshot.donViQuanLy,

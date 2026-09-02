@@ -1,3 +1,4 @@
+import { generateCollateralSnapshots } from './mockDataGenerator'
 export const collateralSnapshots = [
   {
     kyBaoCao: '2026-06-30',
@@ -134,4 +135,5 @@ export const collateralSnapshots = [
     trangThaiTsbd: 'Đang bảo đảm',
     donViQuanLy: 'Đơn vị TP.HCM',
   },
+  ...generateCollateralSnapshots(),
 ]
