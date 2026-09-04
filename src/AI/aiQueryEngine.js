@@ -372,6 +372,98 @@ if (
   }
 }
 
+if (
+  query.filters?.changeType ===
+  AI_CHANGE_TYPES.VALUATION_INCREASE
+) {
+  const increasedItems =
+    comparisonItems.filter((item) => {
+      const fromValue =
+        item.fromAsset?.gtDinhGia
+
+      const toValue =
+        item.toAsset?.gtDinhGia
+
+      return (
+        fromValue != null &&
+        toValue != null &&
+        toValue > fromValue
+      )
+    })
+
+  return {
+    success: true,
+    intent: query.intent,
+    fromPeriod: query.fromPeriod,
+    toPeriod: query.toPeriod,
+    data: increasedItems,
+    result: {
+      changeType:
+        AI_CHANGE_TYPES.VALUATION_INCREASE,
+      recordCount: increasedItems.length,
+    },
+    errors: [],
+  }
+}
+
+if (
+  query.filters?.changeType ===
+  AI_CHANGE_TYPES.VALUATION_DECREASE
+) {
+  const decreasedItems =
+    comparisonItems.filter((item) => {
+      const fromValue =
+        item.fromAsset?.gtDinhGia
+
+      const toValue =
+        item.toAsset?.gtDinhGia
+
+      return (
+        fromValue != null &&
+        toValue != null &&
+        toValue < fromValue
+      )
+    })
+
+  return {
+    success: true,
+    intent: query.intent,
+    fromPeriod: query.fromPeriod,
+    toPeriod: query.toPeriod,
+    data: decreasedItems,
+    result: {
+      changeType:
+        AI_CHANGE_TYPES.VALUATION_DECREASE,
+      recordCount: decreasedItems.length,
+    },
+    errors: [],
+  }
+}
+
+if (
+  query.filters?.changeType ===
+  AI_CHANGE_TYPES.NEW
+) {
+  const newItems =
+    comparisonItems.filter(
+      (item) =>
+        !item.fromAsset &&
+        Boolean(item.toAsset)
+    )
+
+  return {
+    success: true,
+    intent: query.intent,
+    fromPeriod: query.fromPeriod,
+    toPeriod: query.toPeriod,
+    data: newItems,
+    result: {
+      changeType: AI_CHANGE_TYPES.NEW,
+      recordCount: newItems.length,
+    },
+    errors: [],
+  }
+}
   return {
     success: false,
     intent: query.intent,

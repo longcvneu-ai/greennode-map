@@ -255,3 +255,63 @@ console.log(
   'AI QUERY TEST 14 - COMPARE MISSING SOURCE:',
   executeAIQuery(missingSourceCompareQuery)
 )
+
+// TEST 15: COMPARE tài sản tăng giá trị định giá từ T7 -> T8
+const valuationIncreaseCompareQuery = createEmptyAIQuery()
+
+valuationIncreaseCompareQuery.intent =
+  AI_QUERY_INTENTS.COMPARE
+
+valuationIncreaseCompareQuery.timeMode =
+  AI_TIME_MODES.RANGE
+
+valuationIncreaseCompareQuery.fromPeriod = '2026-07-31'
+valuationIncreaseCompareQuery.toPeriod = '2026-08-31'
+
+valuationIncreaseCompareQuery.filters.changeType =
+  AI_CHANGE_TYPES.VALUATION_INCREASE
+
+console.log(
+  'AI QUERY TEST 15 - COMPARE VALUATION INCREASE:',
+  executeAIQuery(valuationIncreaseCompareQuery)
+)
+
+// TEST 16: COMPARE tài sản giảm giá trị định giá từ T7 -> T8
+const valuationDecreaseCompareQuery = createEmptyAIQuery()
+
+valuationDecreaseCompareQuery.intent =
+  AI_QUERY_INTENTS.COMPARE
+
+valuationDecreaseCompareQuery.timeMode =
+  AI_TIME_MODES.RANGE
+
+valuationDecreaseCompareQuery.fromPeriod = '2026-07-31'
+valuationDecreaseCompareQuery.toPeriod = '2026-08-31'
+
+valuationDecreaseCompareQuery.filters.changeType =
+  AI_CHANGE_TYPES.VALUATION_DECREASE
+
+console.log(
+  'AI QUERY TEST 16 - COMPARE VALUATION DECREASE:',
+  executeAIQuery(valuationDecreaseCompareQuery)
+)
+
+// TEST 17: COMPARE tài sản mới xuất hiện từ T7 -> T8
+const newCompareQuery = createEmptyAIQuery()
+
+newCompareQuery.intent =
+  AI_QUERY_INTENTS.COMPARE
+
+newCompareQuery.timeMode =
+  AI_TIME_MODES.RANGE
+
+newCompareQuery.fromPeriod = '2026-07-31'
+newCompareQuery.toPeriod = '2026-08-31'
+
+newCompareQuery.filters.changeType =
+  AI_CHANGE_TYPES.NEW
+
+console.log(
+  'AI QUERY TEST 17 - COMPARE NEW:',
+  executeAIQuery(newCompareQuery)
+)
