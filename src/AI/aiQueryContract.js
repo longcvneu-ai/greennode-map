@@ -53,4 +53,4 @@ export function createEmptyAIQuery() {
 
     metric: null,
   }
-}
+}   
