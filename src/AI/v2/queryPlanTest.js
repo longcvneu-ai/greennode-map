@@ -293,3 +293,158 @@ console.log(
   'QUERY PLAN V2 TEST 11 - TOP DEBT PROVINCE:',
   executeQueryPlan(topDebtProvincePlan)
 )
+
+const lookupValuationAssetPlan = {
+  version: '2.0',
+
+  timeContext: {
+    mode: 'SINGLE_PERIOD',
+    period: '2026-08-31',
+    fromPeriod: null,
+    toPeriod: null,
+  },
+
+  steps: [
+    {
+      action: 'LOOKUP',
+      field: 'maTsDg',
+      value: 'DG001',
+    },
+  ],
+}
+
+console.log(
+  'QUERY PLAN V2 TEST 12 - LOOKUP DG001:',
+  executeQueryPlan(lookupValuationAssetPlan)
+)
+
+const lookupCollateralPlan = {
+  version: '2.0',
+
+  timeContext: {
+    mode: 'SINGLE_PERIOD',
+    period: '2026-08-31',
+    fromPeriod: null,
+    toPeriod: null,
+  },
+
+  steps: [
+    {
+      action: 'LOOKUP',
+      field: 'maTsbd',
+      value: 'BD001',
+    },
+  ],
+}
+
+console.log(
+  'QUERY PLAN V2 TEST 13 - LOOKUP BD001:',
+  executeQueryPlan(lookupCollateralPlan)
+)
+
+const lookupCustomerPlan = {
+  version: '2.0',
+
+  timeContext: {
+    mode: 'SINGLE_PERIOD',
+    period: '2026-08-31',
+    fromPeriod: null,
+    toPeriod: null,
+  },
+
+  steps: [
+    {
+      action: 'LOOKUP',
+      field: 'cif',
+      value: 'CIF001',
+    },
+  ],
+}
+
+console.log(
+  'QUERY PLAN V2 TEST 14 - LOOKUP CIF001:',
+  executeQueryPlan(lookupCustomerPlan)
+)
+
+const compareValuationPlan = {
+  version: '2.0',
+
+  timeContext: {
+    mode: 'RANGE',
+    period: null,
+    fromPeriod: '2026-07-31',
+    toPeriod: '2026-08-31',
+  },
+
+  steps: [
+    {
+      action: 'LOOKUP',
+      field: 'maTsDg',
+      value: 'DG001',
+    },
+    {
+      action: 'COMPARE',
+      field: 'gtDinhGia',
+    },
+  ],
+}
+
+console.log(
+  'QUERY PLAN V2 TEST 15 - COMPARE DG001 VALUATION:',
+  executeQueryPlan(compareValuationPlan)
+)
+
+const invalidSequencePlan1 = {
+  version: '2.0',
+
+  timeContext: {
+    mode: 'SINGLE_PERIOD',
+    period: '2026-08-31',
+    fromPeriod: null,
+    toPeriod: null,
+  },
+
+  steps: [
+    {
+      action: 'AGGREGATE',
+      metric: 'TOTAL_DEBT',
+    },
+    {
+      action: 'GROUP_BY',
+      field: 'province',
+    },
+  ],
+}
+
+console.log(
+  'QUERY PLAN V2 TEST 16 - INVALID GROUP AFTER AGGREGATE:',
+  validateQueryPlan(invalidSequencePlan1)
+)
+
+const invalidSequencePlan2 = {
+  version: '2.0',
+
+  timeContext: {
+    mode: 'SINGLE_PERIOD',
+    period: '2026-08-31',
+    fromPeriod: null,
+    toPeriod: null,
+  },
+
+  steps: [
+    {
+      action: 'SORT',
+      by: 'value',
+      order: 'DESC',
+    },
+    {
+      action: 'AGGREGATE',
+      metric: 'TOTAL_DEBT',
+    },
+  ],
+}
+
+console.log(
+  'QUERY PLAN V2 TEST 17 - INVALID SORT BEFORE AGGREGATE:',
+  validateQueryPlan(invalidSequencePlan2)
+)

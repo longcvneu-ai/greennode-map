@@ -6,6 +6,8 @@ import {
   QUERY_PLAN_SORT_ORDERS,
   QUERY_PLAN_METRICS,
   QUERY_PLAN_GROUP_FIELDS,
+  QUERY_PLAN_LOOKUP_FIELDS,
+  QUERY_PLAN_COMPARE_FIELDS,
 } from './queryPlanContract'
 
 
@@ -87,6 +89,63 @@ export function validateQueryPlan(plan) {
     }
 
     if (
+  step.action === QUERY_PLAN_ACTIONS.LOOKUP
+) {
+  if (
+    !isAllowedValue(
+      step.field,
+      QUERY_PLAN_LOOKUP_FIELDS
+    )
+  ) {
+    errors.push(
+      `Step ${index + 1}: LOOKUP field không hợp lệ: ${step.field}`
+    )
+  }
+
+  if (
+    step.value === undefined ||
+    step.value === null ||
+    step.value === ''
+  ) {
+    errors.push(
+      `Step ${index + 1}: LOOKUP phải có value.`
+    )
+  }
+}
+
+if (
+  step.action === QUERY_PLAN_ACTIONS.COMPARE
+) {
+  if (
+    !isAllowedValue(
+      step.field,
+      QUERY_PLAN_COMPARE_FIELDS
+    )
+  ) {
+    errors.push(
+      `Step ${index + 1}: COMPARE field không hợp lệ: ${step.field}`
+    )
+  }
+
+  if (
+    plan.timeContext?.mode !== 'RANGE'
+  ) {
+    errors.push(
+      `Step ${index + 1}: COMPARE yêu cầu timeContext.mode = RANGE.`
+    )
+  }
+
+  if (
+    !plan.timeContext?.fromPeriod ||
+    !plan.timeContext?.toPeriod
+  ) {
+    errors.push(
+      `Step ${index + 1}: COMPARE phải có fromPeriod và toPeriod.`
+    )
+  }
+}
+
+    if (
       step.action === QUERY_PLAN_ACTIONS.GROUP_BY
     ) {
       if (
@@ -150,6 +209,85 @@ export function validateQueryPlan(plan) {
       }
     }
   })
+
+  // ===== V2 STEP SEQUENCE VALIDATION =====
+
+  const actions = plan.steps.map(
+    (step) => step.action
+  )
+
+  const compareIndex =
+    actions.indexOf(
+      QUERY_PLAN_ACTIONS.COMPARE
+    )
+
+  const groupByIndex =
+    actions.indexOf(
+      QUERY_PLAN_ACTIONS.GROUP_BY
+    )
+
+  const aggregateIndex =
+    actions.indexOf(
+      QUERY_PLAN_ACTIONS.AGGREGATE
+    )
+
+  const sortIndex =
+    actions.indexOf(
+      QUERY_PLAN_ACTIONS.SORT
+    )
+
+  const limitIndex =
+    actions.indexOf(
+      QUERY_PLAN_ACTIONS.LIMIT
+    )
+
+  // COMPARE phải là bước cuối.
+  if (
+    compareIndex !== -1 &&
+    compareIndex !== actions.length - 1
+  ) {
+    errors.push(
+      'COMPARE phải là bước cuối của Query Plan.'
+    )
+  }
+
+  // Nếu vừa GROUP_BY vừa AGGREGATE,
+  // GROUP_BY phải đứng trước AGGREGATE.
+  if (
+    groupByIndex !== -1 &&
+    aggregateIndex !== -1 &&
+    groupByIndex > aggregateIndex
+  ) {
+    errors.push(
+      'GROUP_BY phải đứng trước AGGREGATE.'
+    )
+  }
+
+  // SORT phải đứng sau AGGREGATE
+  // trong pipeline xếp hạng hiện tại.
+  if (
+    sortIndex !== -1 &&
+    (
+      aggregateIndex === -1 ||
+      sortIndex < aggregateIndex
+    )
+  ) {
+    errors.push(
+      'SORT phải đứng sau AGGREGATE.'
+    )
+  }
+
+  // LIMIT phải đứng sau SORT
+  // nếu Query Plan có SORT.
+  if (
+    limitIndex !== -1 &&
+    sortIndex !== -1 &&
+    limitIndex < sortIndex
+  ) {
+    errors.push(
+      'LIMIT phải đứng sau SORT.'
+    )
+  }
 
   return {
     valid: errors.length === 0,

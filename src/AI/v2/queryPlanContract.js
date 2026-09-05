@@ -39,6 +39,19 @@ export const QUERY_PLAN_GROUP_FIELDS = {
   VALUATION_RISK: 'valuationRisk',
 }
 
+export const QUERY_PLAN_LOOKUP_FIELDS = {
+  VALUATION_CODE: 'maTsDg',
+  COLLATERAL_CODE: 'maTsbd',
+  CUSTOMER_CIF: 'cif',
+}
+
+export const QUERY_PLAN_COMPARE_FIELDS = {
+  VALUATION: 'gtDinhGia',
+  COLLATERAL_VALUE: 'gtBaoDam',
+  DEBT: 'duNoTsbd',
+  LTV: 'ltv',
+}
+
 export function createEmptyQueryPlan() {
   return {
     version: '2.0',
