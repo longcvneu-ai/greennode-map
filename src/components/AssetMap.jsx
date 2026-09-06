@@ -61,9 +61,42 @@ function MapUpdater({ assets, selectedAssetId, markerRefs }) {
     ])
 
     map.fitBounds(bounds, {
-      padding: [40, 40],
-    })
+  padding: [50, 50],
+  maxZoom: 7,
+})
   }, [assets, selectedAssetId, map, markerRefs])
+
+  return null
+}
+
+function MapResizeHandler() {
+  const map = useMap()
+
+  useEffect(() => {
+    const container =
+      map.getContainer()
+
+    const resizeObserver =
+      new ResizeObserver(() => {
+        map.invalidateSize({
+          animate: false,
+        })
+      })
+
+    resizeObserver.observe(container)
+
+    const timeoutId =
+      setTimeout(() => {
+        map.invalidateSize({
+          animate: false,
+        })
+      }, 300)
+
+    return () => {
+      resizeObserver.disconnect()
+      clearTimeout(timeoutId)
+    }
+  }, [map])
 
   return null
 }
@@ -83,24 +116,27 @@ function AssetMap({
   return (
     <div className="map-placeholder">
 
-      <div className="map-summary">
-        <strong>{assetsWithLocation.length}</strong>
-        <span>tài sản có tọa độ đang hiển thị</span>
-      </div>
+  <div className="map-summary map-summary-floating">
+    <strong>{assetsWithLocation.length}</strong>
+    <span>tài sản đang hiển thị</span>
+  </div>
 
-      <MapContainer
+  <MapContainer
         center={[16, 106]}
         zoom={5}
         style={{
-          height: '470px',
-          width: '100%',
-          borderRadius: '12px',
-        }}
+  height: '100%',
+  width: '100%',
+  borderRadius: '12px',
+}}
       >
         <TileLayer
           attribution="&copy; OpenStreetMap contributors"
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
+
+        <MapResizeHandler />
+
 
         <MapUpdater
           assets={assetsWithLocation}

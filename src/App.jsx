@@ -15,6 +15,24 @@ import {
 } from './services/excelImportService'
 import AssetMap from './components/AssetMap'
 
+import {
+  createQueryPlanFromGreenNode,
+} from './AI/v2/greennodeAdapter'
+
+import {
+  validateQueryPlan,
+} from './AI/v2/queryPlanValidator'
+
+import {
+  executeQueryPlan,
+} from './AI/v2/queryPlanExecutor'
+
+import {
+  formatQueryAnswer,
+} from './AI/v2/queryAnswerFormatter'
+
+import tsbdLogo from './assets/tsbd-logo.png'
+
 function App() {
     
   const [objectType, setObjectType] = useState('Tất cả')
@@ -28,6 +46,21 @@ const [fromPeriod, setFromPeriod] = useState('2026-06-30')
 const [toPeriod, setToPeriod] = useState('2026-08-31')
 const [changeType, setChangeType] = useState('Tất cả')
   const [selectedAssetId, setSelectedAssetId] = useState(null)
+
+  const [filterOpen, setFilterOpen] =
+  useState(false)
+
+const [aiQuestion, setAiQuestion] =
+  useState('')
+
+const [aiLoading, setAiLoading] =
+  useState(false)
+
+const [aiError, setAiError] =
+  useState('')
+
+const [aiResult, setAiResult] =
+  useState(null)
 
   const [excelFileInfo, setExcelFileInfo] =
   useState(null)
@@ -692,6 +725,78 @@ const comparisonToTotalDebt =
     }
   }, 100)
 }
+
+const handleAskAI = async () => {
+  const question = aiQuestion.trim()
+
+  if (!question) {
+    setAiError('Vui lòng nhập câu hỏi.')
+    setAiResult(null)
+    return
+  }
+
+  try {
+    setAiLoading(true)
+    setAiError('')
+    setAiResult(null)
+
+    const queryPlan =
+      await createQueryPlanFromGreenNode(
+        question
+      )
+
+    const validation =
+      validateQueryPlan(queryPlan)
+
+    if (!validation.valid) {
+      setAiError(
+        `Query Plan không hợp lệ: ${validation.errors.join(
+          ' | '
+        )}`
+      )
+      return
+    }
+
+    const result =
+      executeQueryPlan(
+        queryPlan,
+        activeDataset
+      )
+
+    if (!result.success) {
+      setAiError(
+        result.errors?.join(' | ') ||
+        'Không thể thực thi Query Plan.'
+      )
+      return
+    }
+
+    const answer =
+  formatQueryAnswer(
+    queryPlan,
+    result
+  )
+
+setAiResult({
+  question,
+  queryPlan,
+  result,
+  answer,
+})
+  } catch (error) {
+    console.error(
+      'GreenNode AI error:',
+      error
+    )
+
+    setAiError(
+      'Không thể kết nối hoặc xử lý yêu cầu AI.'
+    )
+  } finally {
+    setAiLoading(false)
+  }
+}
+
 const handleExcelFileChange = async (event) => {
   const file = event.target.files?.[0]
 
@@ -850,20 +955,96 @@ const handleViewAssetDetail = (asset) => {
 
   return (
     <div className="app">
-      <header className="header">
-        <div>
-          <h1>GreenNode Map</h1>
-          <p>Bản đồ số Tài sản / TSBĐ</p>
-        </div>
+      <header className="gn-header">
+  <div className="gn-header-wave" />
 
-        <div className="version">
-          V1 Prototype
-        </div>
-      </header>
+  <div className="gn-brand">
+    <img
+      src={tsbdLogo}
+      alt="Logo hệ sinh thái bản đồ số TSBĐ"
+      className="gn-logo-image"
+    />
 
-      <section className="workspace">
-                <aside className="filter-panel">
-          <h2>Bộ lọc</h2>
+    <div className="gn-brand-text">
+      <div className="gn-unit">
+        Trung tâm Định giá & Quản lý TSBĐ
+      </div>
+
+      <div className="gn-division">
+        Khối Quản lý Rủi ro
+      </div>
+
+      <h1>
+        Hệ sinh thái bản đồ số TSBĐ
+      </h1>
+    </div>
+  </div>
+
+  <div className="gn-header-right">
+    <div className="gn-source-badge">
+      <span className="gn-source-dot" />
+
+      Dữ liệu:
+      <strong>
+        {excelImported ? 'EXCEL' : 'MOCK'}
+      </strong>
+    </div>
+
+    <div className="gn-user">
+      <div className="gn-user-avatar">
+        TL
+      </div>
+
+      <div className="gn-user-name">
+        Người dùng
+      </div>
+    </div>
+  </div>
+</header>
+
+      <section
+        className={`workspace ${
+          filterOpen
+      ? 'filter-open'
+      : 'filter-closed'
+       }`}
+      >
+
+        {!filterOpen && (
+        <button
+  type="button"
+  className="filter-toggle"
+  onClick={() =>
+    setFilterOpen(
+      (current) => !current
+    )
+  }
+>
+  <span className="filter-toggle-icon">
+    ☰
+  </span>
+
+  <span className="filter-toggle-text">
+    Bộ lọc thông tin
+  </span>
+</button>
+)}
+                {filterOpen && (
+  <aside className="filter-panel">
+    <div className="filter-panel-header">
+      <h2>Bộ lọc thông tin</h2>
+
+      <button
+        type="button"
+        className="filter-close"
+        onClick={() =>
+          setFilterOpen(false)
+        }
+        aria-label="Đóng bộ lọc"
+      >
+        ×
+      </button>
+    </div>
           <label>
           Chế độ thời gian
        <select
@@ -1035,35 +1216,226 @@ const handleViewAssetDetail = (asset) => {
               <option>Sai thông tin tài sản</option>
             </select>
           </label>
-        </aside>
+          </aside>
+)}
 
-        <section
-  className="map-panel"
-  id="asset-map-panel"
->
-          <div className="panel-title">
-            <div>
-              <h2>Bản đồ tài sản</h2>
-            </div>
+      
+    <div className="map-column">
 
-            <span>
-              OpenStreetMap / Leaflet - Thử nghiệm
-            </span>
-          </div>
+  <section
+    className="map-panel"
+    id="asset-map-panel"
+  >
+    <div className="panel-title">
+      <h2>Bản đồ tài sản</h2>
+    </div>
 
-          <AssetMap
-  assets={mapAssets}
-  selectedAssetId={selectedAssetId}
-  onViewDetail={handleViewAssetDetail}
-  changeType={
-  timeMode === 'Khoảng thời gian'
-    ? changeType
-    : 'Tất cả'
-}
-/>
-        </section>
+    <AssetMap
+      assets={mapAssets}
+      selectedAssetId={selectedAssetId}
+      onViewDetail={handleViewAssetDetail}
+      changeType={
+        timeMode === 'Khoảng thời gian'
+          ? changeType
+          : 'Tất cả'
+      }
+    />
+  </section>
 
-        <aside className="ai-panel">
+
+  <section className="kpi-section">
+
+  {/* =========================
+      KPI 1 - SỐ TÀI SẢN
+      ========================= */}
+  <div className="kpi-card">
+    <span>Số tài sản</span>
+
+    {timeMode === 'Một kỳ' ? (
+      <>
+        <strong>
+          {totalAssets}
+        </strong>
+
+        <small>
+          Theo bộ lọc hiện tại
+        </small>
+      </>
+    ) : (
+      <>
+        <strong>
+          {comparisonFromTotalAssets}
+          {' → '}
+          {comparisonToTotalAssets}
+        </strong>
+
+        <small>
+          Biến động:{' '}
+
+          {comparisonToTotalAssets -
+            comparisonFromTotalAssets >=
+          0
+            ? '+'
+            : ''}
+
+          {comparisonToTotalAssets -
+            comparisonFromTotalAssets}
+        </small>
+      </>
+    )}
+  </div>
+
+
+  {/* =========================
+      KPI 2 - GIÁ TRỊ ĐỊNH GIÁ
+      ========================= */}
+  <div className="kpi-card">
+    <span>Tổng GT định giá</span>
+
+    {timeMode === 'Một kỳ' ? (
+      <>
+        <strong>
+          {formatBillion(
+            totalValuation
+          )}
+        </strong>
+
+        <small>
+          Theo bộ lọc hiện tại
+        </small>
+      </>
+    ) : (
+      <>
+        <strong>
+          {formatBillion(
+            comparisonFromTotalValuation
+          )}
+
+          {' → '}
+
+          {formatBillion(
+            comparisonToTotalValuation
+          )}
+        </strong>
+
+        <small>
+          Biến động:{' '}
+
+          {comparisonToTotalValuation -
+            comparisonFromTotalValuation >=
+          0
+            ? '+'
+            : ''}
+
+          {formatBillion(
+            comparisonToTotalValuation -
+              comparisonFromTotalValuation
+          )}
+        </small>
+      </>
+    )}
+  </div>
+
+
+  {/* =========================
+      KPI 3 - SỐ TSBĐ
+      ========================= */}
+  <div className="kpi-card">
+    <span>Số TSBĐ</span>
+
+    {timeMode === 'Một kỳ' ? (
+      <>
+        <strong>
+          {totalCollateralAssets}
+        </strong>
+
+        <small>
+          Đang bảo đảm
+        </small>
+      </>
+    ) : (
+      <>
+        <strong>
+          {comparisonFromTotalCollateralAssets}
+
+          {' → '}
+
+          {comparisonToTotalCollateralAssets}
+        </strong>
+
+        <small>
+          Biến động:{' '}
+
+          {comparisonToTotalCollateralAssets -
+            comparisonFromTotalCollateralAssets >=
+          0
+            ? '+'
+            : ''}
+
+          {comparisonToTotalCollateralAssets -
+            comparisonFromTotalCollateralAssets}
+        </small>
+      </>
+    )}
+  </div>
+
+
+  {/* =========================
+      KPI 4 - DƯ NỢ TSBĐ
+      ========================= */}
+  <div className="kpi-card">
+    <span>Dư nợ TSBĐ</span>
+
+    {timeMode === 'Một kỳ' ? (
+      <>
+        <strong>
+          {formatBillion(
+            totalCollateralDebt
+          )}
+        </strong>
+
+        <small>
+          Theo bộ lọc hiện tại
+        </small>
+      </>
+    ) : (
+      <>
+        <strong>
+          {formatBillion(
+            comparisonFromTotalDebt
+          )}
+
+          {' → '}
+
+          {formatBillion(
+            comparisonToTotalDebt
+          )}
+        </strong>
+
+        <small>
+          Biến động:{' '}
+
+          {comparisonToTotalDebt -
+            comparisonFromTotalDebt >=
+          0
+            ? '+'
+            : ''}
+
+          {formatBillion(
+            comparisonToTotalDebt -
+              comparisonFromTotalDebt
+          )}
+        </small>
+      </>
+    )}
+  </div>
+
+</section>
+
+</div>
+
+<aside className="ai-panel">
+
   <h2>Dữ liệu đầu vào</h2>
 
   <div
@@ -1396,165 +1768,99 @@ const handleViewAssetDetail = (asset) => {
 
   <h2>Trợ lý AI</h2>
 
-            <p className="ai-description">
-            AI Query sẽ được kết nối ở giai đoạn sau.
-          </p>
+<p className="ai-description">
+  Hỏi dữ liệu Tài sản / TSBĐ bằng ngôn ngữ tự nhiên.
+</p>
 
-          <div className="ai-placeholder">
-            Sau này AI có thể hiểu câu hỏi, chuyển thành
-            điều kiện truy vấn và điều khiển Map, KPI và
-            bảng dữ liệu.
-          </div>
+<textarea
+  placeholder="Ví dụ: Top 1 tỉnh có dư nợ TSBĐ cao nhất tháng 8/2026"
+  value={aiQuestion}
+  onChange={(event) =>
+    setAiQuestion(event.target.value)
+  }
+  disabled={aiLoading}
+/>
 
-          <textarea
-            placeholder="Ví dụ: Tìm BĐS tại Hà Nội có rủi ro định giá cao..."
-            disabled
-          />
+<button
+  type="button"
+  onClick={handleAskAI}
+  disabled={
+    aiLoading ||
+    !aiQuestion.trim()
+  }
+>
+  {aiLoading
+    ? 'Đang xử lý...'
+    : 'Hỏi AI'}
+</button>
 
-          <button disabled>
-            Hỏi AI
-          </button>
+{aiError && (
+  <div
+    style={{
+      marginTop: '10px',
+      padding: '10px',
+      border: '1px solid #fecaca',
+      borderRadius: '8px',
+      background: '#fef2f2',
+      fontSize: '12px',
+      lineHeight: '1.5',
+    }}
+  >
+    ❌ {aiError}
+  </div>
+)}
+
+{aiResult && (
+  <div
+    style={{
+      marginTop: '10px',
+      padding: '10px',
+      border: '1px solid #cbd5e1',
+      borderRadius: '8px',
+      background: '#f8fafc',
+      fontSize: '12px',
+      lineHeight: '1.5',
+    }}
+  >
+    <div
+      style={{
+        fontWeight: '700',
+        marginBottom: '6px',
+      }}
+    >
+      Kết quả AI
+    </div>
+
+<div
+  style={{
+    marginBottom: '10px',
+    fontSize: '13px',
+    lineHeight: '1.6',
+  }}
+>
+  {aiResult.answer}
+</div>
+
+    <pre
+      style={{
+        margin: 0,
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word',
+        fontFamily: 'inherit',
+      }}
+    >
+      {JSON.stringify(
+        aiResult.result,
+        null,
+        2
+      )}
+    </pre>
+  </div>
+)}
         </aside>
       </section>
 
-      <section className="kpi-section">
-  <div className="kpi-card">
-    <span>Số tài sản</span>
-
-    {timeMode === 'Một kỳ' ? (
-      <>
-        <strong>{totalAssets}</strong>
-        <small>Theo bộ lọc hiện tại</small>
-      </>
-    ) : (
-      <>
-        <strong>
-  {comparisonFromTotalAssets}
-  {' → '}
-  {comparisonToTotalAssets}
-</strong>
-
-<small>
-  Biến động:{' '}
-  {comparisonToTotalAssets -
-    comparisonFromTotalAssets >=
-  0
-    ? '+'
-    : ''}
-  {comparisonToTotalAssets -
-    comparisonFromTotalAssets}
-</small>
-      </>
-    )}
-  </div>
-
-  <div className="kpi-card">
-    <span>Tổng GT định giá</span>
-
-    {timeMode === 'Một kỳ' ? (
-      <>
-        <strong>
-          {formatBillion(totalValuation)}
-        </strong>
-        <small>Theo bộ lọc hiện tại</small>
-      </>
-    ) : (
-        <>
-      <strong>
-        {formatBillion(
-          comparisonFromTotalValuation
-        )}
-        {' → '}
-        {formatBillion(
-          comparisonToTotalValuation
-        )}
-      </strong>
-
-      <small>
-        Biến động:{' '}
-        {comparisonToTotalValuation -
-          comparisonFromTotalValuation >=
-        0
-          ? '+'
-          : ''}
-        {formatBillion(
-          comparisonToTotalValuation -
-            comparisonFromTotalValuation
-        )}
-      </small>
-    </>
-  )}
-</div>
-
-  <div className="kpi-card">
-    <span>Số TSBĐ</span>
-
-    {timeMode === 'Một kỳ' ? (
-      <>
-        <strong>{totalCollateralAssets}</strong>
-        <small>Đang bảo đảm</small>
-      </>
-    ) : (
-      <>
-        <strong>
-  {comparisonFromTotalCollateralAssets}
-  {' → '}
-  {comparisonToTotalCollateralAssets}
-</strong>
-
-<small>
-  Biến động:{' '}
-  {comparisonToTotalCollateralAssets -
-    comparisonFromTotalCollateralAssets >=
-  0
-    ? '+'
-    : ''}
-  {comparisonToTotalCollateralAssets -
-    comparisonFromTotalCollateralAssets}
-</small>
-      </>
-    )}
-  </div>
-
-  <div className="kpi-card">
-    <span>Dư nợ TSBĐ</span>
-
-    {timeMode === 'Một kỳ' ? (
-      <>
-        <strong>
-          {formatBillion(totalCollateralDebt)}
-        </strong>
-        <small>Theo bộ lọc hiện tại</small>
-      </>
-    ) : (
-      <>
-       <strong>
-  {formatBillion(
-    comparisonFromTotalDebt
-  )}
-  {' → '}
-  {formatBillion(
-    comparisonToTotalDebt
-  )}
-</strong>
-
-<small>
-  Biến động:{' '}
-  {comparisonToTotalDebt -
-    comparisonFromTotalDebt >=
-  0
-    ? '+'
-    : ''}
-  {formatBillion(
-    comparisonToTotalDebt -
-      comparisonFromTotalDebt
-  )}
-</small>
-      </>
-    )}
-  </div>
-</section>
-
+      
       <section className="table-section">
   <div className="table-header">
     <div>

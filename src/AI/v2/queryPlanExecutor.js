@@ -274,7 +274,10 @@ function compareFieldBetweenPeriods(
   }
 }
 
-export function executeQueryPlan(plan) {
+export function executeQueryPlan(
+  plan,
+  dataset
+) {
   const validation = validateQueryPlan(plan)
 
   if (!validation.valid) {
@@ -327,8 +330,14 @@ if (
 }
 
 let data = isRange
-  ? getAssetsByReportingPeriod(toPeriod)
-  : getAssetsByReportingPeriod(period)
+  ? getAssetsByReportingPeriod(
+      toPeriod,
+      dataset
+    )
+  : getAssetsByReportingPeriod(
+      period,
+      dataset
+    )
 
   // Số bản ghi ban đầu của kỳ báo cáo,
   // trước khi thực hiện bất kỳ bước nào.
@@ -381,8 +390,11 @@ let data = isRange
 if (
   step.action === QUERY_PLAN_ACTIONS.COMPARE
 ) {
-  const fromData =
-    getAssetsByReportingPeriod(fromPeriod)
+     const fromData =
+  getAssetsByReportingPeriod(
+    fromPeriod,
+    dataset
+  )
 
   let matchedFromData = fromData
 
