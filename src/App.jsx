@@ -62,6 +62,9 @@ const [aiError, setAiError] =
 const [aiResult, setAiResult] =
   useState(null)
 
+const [aiJobs, setAiJobs] =
+  useState([])
+
   const [excelFileInfo, setExcelFileInfo] =
   useState(null)
 
@@ -726,71 +729,288 @@ const comparisonToTotalDebt =
   }, 100)
 }
 
+function splitQuestions(input) {
+  const text =
+    String(input || '')
+      .replace(/\r\n/g, '\n')
+      .trim()
+
+  if (!text) {
+    return []
+  }
+
+  const rawParts =
+    text
+      .split(/\n+|\?+/)
+      .map((item) =>
+        item.trim()
+      )
+      .filter(Boolean)
+
+  const uniqueQuestions = []
+
+  rawParts.forEach((question) => {
+    if (
+      !uniqueQuestions.includes(
+        question
+      )
+    ) {
+      uniqueQuestions.push(
+        question
+      )
+    }
+  })
+
+  return uniqueQuestions
+}
+
 const handleAskAI = async () => {
   const question = aiQuestion.trim()
 
   if (!question) {
     setAiError('Vui lòng nhập câu hỏi.')
     setAiResult(null)
+    setAiJobs([])
     return
   }
 
-  try {
-    setAiLoading(true)
-    setAiError('')
+  const questions = splitQuestions(question)
+
+  if (questions.length > 20) {
+    setAiError(
+      `Bạn đang gửi ${questions.length} câu hỏi. Vui lòng chia thành tối đa 20 câu mỗi lần.`
+    )
+    setAiJobs([])
     setAiResult(null)
+    return
+  }
 
-    const queryPlan =
-      await createQueryPlanFromGreenNode(
-        question
-      )
+  const batchStartTime = performance.now()
 
-    const validation =
-      validateQueryPlan(queryPlan)
-
-    if (!validation.valid) {
-      setAiError(
-        `Query Plan không hợp lệ: ${validation.errors.join(
-          ' | '
-        )}`
-      )
-      return
-    }
-
-    const result =
-      executeQueryPlan(
-        queryPlan,
-        activeDataset
-      )
-
-    if (!result.success) {
-      setAiError(
-        result.errors?.join(' | ') ||
-        'Không thể thực thi Query Plan.'
-      )
-      return
-    }
-
-    const answer =
-  formatQueryAnswer(
-    queryPlan,
-    result
+  const initialJobs = questions.map(
+    (item, index) => ({
+      id: `q-${Date.now()}-${index}`,
+      question: item,
+      status: 'PENDING',
+      planner: null,
+      queryPlan: null,
+      result: null,
+      answer: null,
+      error: null,
+    })
   )
 
-setAiResult({
-  question,
-  queryPlan,
-  result,
-  answer,
-})
-  } catch (error) {
-    console.error(
-      'GreenNode AI error:',
-      error
-    )
+  setAiJobs(initialJobs)
+  setAiLoading(true)
+  setAiError('')
+  setAiResult(null)
 
-    setAiError(
-      'Không thể kết nối hoặc xử lý yêu cầu AI.'
+  const completedJobs = []
+
+  try {
+    for (const job of initialJobs) {
+      setAiJobs((currentJobs) =>
+        currentJobs.map((item) =>
+          item.id === job.id
+            ? {
+                ...item,
+                status: 'PROCESSING',
+              }
+            : item
+        )
+      )
+
+      try {
+        const jobStartTime = performance.now()
+
+        const queryPlan =
+          await createQueryPlanFromGreenNode(
+            job.question
+          )
+
+        const validation =
+          validateQueryPlan(queryPlan)
+
+        if (!validation.valid) {
+          const errorMessage =
+            `Query Plan không hợp lệ: ${validation.errors.join(
+              ' | '
+            )}`
+
+          const failedJob = {
+            ...job,
+            status: 'ERROR',
+            queryPlan,
+            error: errorMessage,
+          }
+
+          completedJobs.push(failedJob)
+
+          setAiJobs((currentJobs) =>
+            currentJobs.map((item) =>
+              item.id === job.id
+                ? failedJob
+                : item
+            )
+          )
+
+          continue
+        }
+
+        const result =
+          executeQueryPlan(
+            queryPlan,
+            activeDataset
+          )
+
+        if (!result.success) {
+          const errorMessage =
+            result.errors?.join(' | ') ||
+            'Không thể thực thi Query Plan.'
+
+          const failedJob = {
+            ...job,
+            status: 'ERROR',
+            queryPlan,
+            result,
+            error: errorMessage,
+          }
+
+          completedJobs.push(failedJob)
+
+          setAiJobs((currentJobs) =>
+            currentJobs.map((item) =>
+              item.id === job.id
+                ? failedJob
+                : item
+            )
+          )
+
+          continue
+        }
+
+        const answer =
+          formatQueryAnswer(
+            queryPlan,
+            result
+          )
+
+        const jobEndTime =
+          performance.now()
+
+        const successJob = {
+          ...job,
+          status: 'SUCCESS',
+          queryPlan,
+          result,
+          answer,
+          error: null,
+          durationMs: Math.round(
+            jobEndTime - jobStartTime
+          ),
+        }
+
+        completedJobs.push(successJob)
+
+        setAiJobs((currentJobs) =>
+          currentJobs.map((item) =>
+            item.id === job.id
+              ? successJob
+              : item
+          )
+        )
+
+        console.log(
+          'AI QUESTION COMPLETE:',
+          job.question,
+          `${successJob.durationMs} ms`
+        )
+      } catch (error) {
+        console.error(
+          'GreenNode AI job error:',
+          job.question,
+          error
+        )
+
+        const failedJob = {
+          ...job,
+          status: 'ERROR',
+          error:
+            'Không thể kết nối hoặc xử lý yêu cầu AI.',
+        }
+
+        completedJobs.push(failedJob)
+
+        setAiJobs((currentJobs) =>
+          currentJobs.map((item) =>
+            item.id === job.id
+              ? failedJob
+              : item
+          )
+        )
+      }
+    }
+
+    const successfulJobs =
+      completedJobs.filter(
+        (job) =>
+          job.status === 'SUCCESS'
+      )
+
+    const failedJobs =
+      completedJobs.filter(
+        (job) =>
+          job.status === 'ERROR'
+      )
+
+    /*
+     * Giữ tương thích với UI cũ
+     * nếu người dùng chỉ hỏi 1 câu.
+     */
+    if (
+      questions.length === 1 &&
+      successfulJobs.length === 1
+    ) {
+      const job = successfulJobs[0]
+
+      setAiResult({
+        question: job.question,
+        queryPlan: job.queryPlan,
+        result: job.result,
+        answer: job.answer,
+      })
+    }
+
+    /*
+     * Nếu cả batch đều lỗi,
+     * mới hiện lỗi chung.
+     */
+    if (
+      successfulJobs.length === 0 &&
+      failedJobs.length > 0
+    ) {
+      setAiError(
+        'Không có câu hỏi nào được xử lý thành công.'
+      )
+    }
+
+    const batchEndTime =
+      performance.now()
+
+    console.log(
+      'AI BATCH COMPLETE:',
+      {
+        totalQuestions:
+          questions.length,
+        success:
+          successfulJobs.length,
+        failed:
+          failedJobs.length,
+        totalMs: Math.round(
+          batchEndTime -
+            batchStartTime
+        ),
+      }
     )
   } finally {
     setAiLoading(false)
@@ -1810,51 +2030,552 @@ const handleViewAssetDetail = (asset) => {
   </div>
 )}
 
-{aiResult && (
+{aiJobs.length > 0 && (
   <div
     style={{
-      marginTop: '10px',
-      padding: '10px',
-      border: '1px solid #cbd5e1',
-      borderRadius: '8px',
-      background: '#f8fafc',
-      fontSize: '12px',
-      lineHeight: '1.5',
+      marginTop: '12px',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '12px',
     }}
   >
-    <div
-      style={{
-        fontWeight: '700',
-        marginBottom: '6px',
-      }}
-    >
-      Kết quả AI
-    </div>
+    {aiJobs.map((job, index) => {
+      const data =
+        job.result?.data
 
-<div
-  style={{
-    marginBottom: '10px',
-    fontSize: '13px',
-    lineHeight: '1.6',
-  }}
->
-  {aiResult.answer}
-</div>
+      const steps =
+        job.queryPlan?.steps || []
 
-    <pre
-      style={{
-        margin: 0,
-        whiteSpace: 'pre-wrap',
-        wordBreak: 'break-word',
-        fontFamily: 'inherit',
-      }}
-    >
-      {JSON.stringify(
-        aiResult.result,
-        null,
-        2
-      )}
-    </pre>
+      const aggregateStep =
+        steps.find(
+          (step) =>
+            step.action === 'AGGREGATE'
+        )
+
+      const groupStep =
+        steps.find(
+          (step) =>
+            step.action === 'GROUP_BY'
+        )
+
+      const lookupStep =
+        steps.find(
+          (step) =>
+            step.action === 'LOOKUP'
+        )
+
+      const compareStep =
+        steps.find(
+          (step) =>
+            step.action === 'COMPARE'
+        )
+
+      return (
+        <div
+          key={job.id}
+          className="ai-result-card"
+        >
+          <div className="ai-result-header">
+            <div>
+              <span className="ai-result-kicker">
+                Câu {index + 1}
+              </span>
+
+              <h3
+                style={{
+                  fontSize: '14px',
+                  lineHeight: '1.45',
+                }}
+              >
+                {job.question}
+              </h3>
+            </div>
+
+            <span className="ai-result-status">
+              {job.status === 'SUCCESS'
+                ? '✓ Hoàn tất'
+                : job.status === 'ERROR'
+                ? '✕ Lỗi'
+                : job.status ===
+                  'PROCESSING'
+                ? '⏳ Đang xử lý'
+                : '○ Đang chờ'}
+            </span>
+          </div>
+
+          {job.status ===
+            'PENDING' && (
+            <div className="ai-answer-summary">
+              Đang chờ xử lý...
+            </div>
+          )}
+
+          {job.status ===
+            'PROCESSING' && (
+            <div className="ai-answer-summary">
+              Đang phân tích câu hỏi...
+            </div>
+          )}
+
+          {job.status ===
+            'ERROR' && (
+            <div
+              style={{
+                padding: '10px',
+                border:
+                  '1px solid #fecaca',
+                borderRadius: '8px',
+                background: '#fef2f2',
+                fontSize: '12px',
+                lineHeight: '1.5',
+              }}
+            >
+              ❌{' '}
+              {job.error ||
+                'Không thể xử lý câu hỏi này.'}
+            </div>
+          )}
+
+          {job.status ===
+            'SUCCESS' && (
+            <>
+              <div className="ai-answer-summary">
+                {job.answer}
+              </div>
+
+              {/*
+                ==========================
+                GROUP BY / TOP N
+                ==========================
+              */}
+              {Array.isArray(data) &&
+                data.length > 0 &&
+                groupStep &&
+                aggregateStep && (
+                  <div className="ai-table-wrapper">
+                    <table className="ai-result-table">
+                      <thead>
+                        <tr>
+                          <th>
+                            {groupStep.field ===
+                            'province'
+                              ? 'Tỉnh/Thành phố'
+                              : groupStep.field ===
+                                'assetGroup'
+                              ? 'Nhóm tài sản'
+                              : groupStep.field ===
+                                'valuationUnit'
+                              ? 'Đơn vị định giá'
+                              : 'Nhóm'}
+                          </th>
+
+                          <th>
+                            {aggregateStep.metric ===
+                            'TOTAL_DEBT'
+                              ? 'Dư nợ TSBĐ'
+                              : aggregateStep.metric ===
+                                'TOTAL_VALUATION'
+                              ? 'GT định giá'
+                              : aggregateStep.metric ===
+                                'TOTAL_COLLATERAL'
+                              ? 'GT bảo đảm'
+                              : 'Số lượng'}
+                          </th>
+
+                          <th>
+                            Số bản ghi
+                          </th>
+                        </tr>
+                      </thead>
+
+                      <tbody>
+                        {data.map(
+                          (item) => (
+                            <tr
+                              key={
+                                item.key
+                              }
+                            >
+                              <td>
+                                <strong>
+                                  {
+                                    item.key
+                                  }
+                                </strong>
+                              </td>
+
+                              <td>
+                                {aggregateStep.metric ===
+                                  'TOTAL_DEBT' ||
+                                aggregateStep.metric ===
+                                  'TOTAL_VALUATION' ||
+                                aggregateStep.metric ===
+                                  'TOTAL_COLLATERAL'
+                                  ? formatBillion(
+                                      item.value
+                                    )
+                                  : item.value}
+                              </td>
+
+                              <td>
+                                {item.recordCount ??
+                                  '-'}
+                              </td>
+                            </tr>
+                          )
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+              {/*
+                ==========================
+                AGGREGATE ĐƠN
+                ==========================
+              */}
+              {data &&
+                !Array.isArray(data) &&
+                aggregateStep && (
+                  <div className="ai-table-wrapper">
+                    <table className="ai-result-table">
+                      <tbody>
+                        <tr>
+                          <th>
+                            Chỉ tiêu
+                          </th>
+                          <th>
+                            Kết quả
+                          </th>
+                        </tr>
+
+                        <tr>
+                          <td>
+                            {aggregateStep.metric ===
+                            'TOTAL_DEBT'
+                              ? 'Dư nợ TSBĐ'
+                              : aggregateStep.metric ===
+                                'TOTAL_VALUATION'
+                              ? 'Tổng GT định giá'
+                              : aggregateStep.metric ===
+                                'TOTAL_COLLATERAL'
+                              ? 'Tổng GT bảo đảm'
+                              : 'Số lượng'}
+                          </td>
+
+                          <td>
+                            <strong>
+                              {aggregateStep.metric ===
+                                'TOTAL_DEBT' ||
+                              aggregateStep.metric ===
+                                'TOTAL_VALUATION' ||
+                              aggregateStep.metric ===
+                                'TOTAL_COLLATERAL'
+                                ? formatBillion(
+                                    data.value
+                                  )
+                                : data.value}
+                            </strong>
+                          </td>
+                        </tr>
+
+                        {data.recordCount !==
+                          undefined && (
+                          <tr>
+                            <td>
+                              Số bản ghi
+                            </td>
+                            <td>
+                              {
+                                data.recordCount
+                              }
+                            </td>
+                          </tr>
+                        )}
+
+                        <tr>
+                          <td>
+                            Kỳ báo cáo
+                          </td>
+
+                          <td>
+                            {
+                              job.result
+                                ?.timeContext
+                                ?.period
+                            }
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+              {/*
+                ==========================
+                COMPARE
+                ==========================
+              */}
+              {compareStep &&
+                data &&
+                !Array.isArray(data) &&
+                !aggregateStep && (
+                  <div className="ai-table-wrapper">
+                    <table className="ai-result-table">
+                      <thead>
+                        <tr>
+                          <th>
+                            Chỉ tiêu
+                          </th>
+                          <th>
+                            Đầu kỳ
+                          </th>
+                          <th>
+                            Cuối kỳ
+                          </th>
+                          <th>
+                            Biến động
+                          </th>
+                        </tr>
+                      </thead>
+
+                      <tbody>
+                        <tr>
+                          <td>
+                            {
+                              compareStep.field
+                            }
+                          </td>
+
+                          <td>
+                            {data.fromValue ===
+                              null ||
+                            data.fromValue ===
+                              undefined
+                              ? 'Chưa có dữ liệu'
+                              : formatBillion(
+                                  data.fromValue
+                                )}
+                          </td>
+
+                          <td>
+                            {data.toValue ===
+                              null ||
+                            data.toValue ===
+                              undefined
+                              ? 'Chưa có dữ liệu'
+                              : formatBillion(
+                                  data.toValue
+                                )}
+                          </td>
+
+                          <td>
+                            {data.difference ===
+                              null ||
+                            data.difference ===
+                              undefined ? (
+                              'Chưa xác định'
+                            ) : (
+                              <strong>
+                                {data.difference >=
+                                0
+                                  ? '+'
+                                  : ''}
+
+                                {formatBillion(
+                                  data.difference
+                                )}
+                              </strong>
+                            )}
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+              {/*
+                ==========================
+                LOOKUP
+                ==========================
+              */}
+              {lookupStep &&
+                Array.isArray(data) &&
+                data.length > 0 &&
+                !groupStep && (
+                  <div className="ai-table-wrapper">
+                    <table className="ai-result-table">
+                      <tbody>
+                        <tr>
+                          <th>
+                            Mã tài sản
+                          </th>
+                          <td>
+                            {data[0]
+                              .maTsDg ??
+                              '-'}
+                          </td>
+                        </tr>
+
+                        <tr>
+                          <th>
+                            Tên tài sản
+                          </th>
+                          <td>
+                            {data[0]
+                              .tenTaiSan ??
+                              data[0]
+                                .moTaTs ??
+                              '-'}
+                          </td>
+                        </tr>
+
+                        <tr>
+                          <th>
+                            Loại tài sản
+                          </th>
+                          <td>
+                            {data[0]
+                              .loaiTsCap2 ??
+                              '-'}
+                          </td>
+                        </tr>
+
+                        <tr>
+                          <th>
+                            Tỉnh/Thành phố
+                          </th>
+                          <td>
+                            {data[0]
+                              .tinhTp ??
+                              '-'}
+                          </td>
+                        </tr>
+
+                        <tr>
+                          <th>
+                            GT định giá
+                          </th>
+                          <td>
+                            {data[0]
+                              .gtDinhGia !==
+                              null &&
+                            data[0]
+                              .gtDinhGia !==
+                              undefined
+                              ? formatBillion(
+                                  data[0]
+                                    .gtDinhGia
+                                )
+                              : '-'}
+                          </td>
+                        </tr>
+
+                        <tr>
+                          <th>
+                            Mã TSBĐ
+                          </th>
+                          <td>
+                            {data[0]
+                              .maTsbd ??
+                              '-'}
+                          </td>
+                        </tr>
+
+                        <tr>
+                          <th>
+                            Dư nợ
+                          </th>
+                          <td>
+                            {data[0]
+                              .duNoTsbd !==
+                              null &&
+                            data[0]
+                              .duNoTsbd !==
+                              undefined
+                              ? formatBillion(
+                                  data[0]
+                                    .duNoTsbd
+                                )
+                              : '-'}
+                          </td>
+                        </tr>
+
+                        <tr>
+                          <th>
+                            LTV
+                          </th>
+                          <td>
+                            {data[0].ltv !==
+                              null &&
+                            data[0].ltv !==
+                              undefined
+                              ? `${(
+                                  data[0]
+                                    .ltv *
+                                  100
+                                ).toFixed(
+                                  1
+                                )}%`
+                              : '-'}
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+              <details className="ai-technical-details">
+                <summary>
+                  Xem chi tiết truy vấn
+                </summary>
+
+                <div className="ai-technical-block">
+                  <div className="ai-technical-title">
+                    Query Plan
+                  </div>
+
+                  <pre>
+                    {JSON.stringify(
+                      job.queryPlan,
+                      null,
+                      2
+                    )}
+                  </pre>
+
+                  <div className="ai-technical-title">
+                    Metadata
+                  </div>
+
+                  <pre>
+                    {JSON.stringify(
+                      job.result
+                        ?.metadata,
+                      null,
+                      2
+                    )}
+                  </pre>
+
+                  {job.durationMs !==
+                    undefined && (
+                    <>
+                      <div className="ai-technical-title">
+                        Thời gian xử lý
+                      </div>
+
+                      <div>
+                        {job.durationMs}{' '}
+                        ms
+                      </div>
+                    </>
+                  )}
+                </div>
+              </details>
+            </>
+          )}
+        </div>
+      )
+    })}
   </div>
 )}
         </aside>

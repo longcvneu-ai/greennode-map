@@ -13,7 +13,7 @@ const GREENNODE_BASE_URL =
   'https://maas-llm-aiplatform-hcm.api.vngcloud.vn/v1'
 
 const GREENNODE_MODEL =
-  'z-ai/glm-5.2-hackathon'
+  'qwen/qwen3.6-flash'
 
 app.get('/health', (req, res) => {
   res.json({
@@ -95,23 +95,15 @@ app.post('/api/ai/query-plan', async (req, res) => {
     }
 
     const systemPrompt = `
-Bạn là AI Query Planner cho GreenNode Map.
-
-Nhiệm vụ duy nhất:
-Chuyển câu hỏi tiếng Việt của người dùng thành Query Plan JSON đúng schema V2.
+Bạn là Query Planner cho GreenNode Map.
 
 Chỉ trả về JSON hợp lệ.
 Không giải thích.
-Không thêm markdown.
-Không tự tính toán số liệu.
-Không tự trả lời kết quả nghiệp vụ.
-Không tự tạo field, action, metric hoặc operator ngoài danh sách cho phép.
-Không dùng FILTER để lọc thời gian.
-Thời gian luôn đặt trong timeContext.
-LIMIT bắt buộc dùng key "value".
-SORT dùng "by": "value".
+Không markdown.
+Không tự tính số liệu.
+Không trả lời nghiệp vụ.
 
-Schema bắt buộc:
+Schema:
 
 {
   "version": "2.0",
@@ -124,7 +116,7 @@ Schema bắt buộc:
   "steps": []
 }
 
-Action được phép:
+Actions:
 FILTER
 LOOKUP
 COMPARE
@@ -133,92 +125,77 @@ AGGREGATE
 SORT
 LIMIT
 
-FILTER operators:
-EQ
-NEQ
-GT
-GTE
-LT
-LTE
-IN
+Cấu trúc từng action:
 
-LOOKUP fields:
-maTsDg
-maTsbd
-cif
-
-COMPARE fields:
-gtDinhGia
-gtBaoDam
-duNoTsbd
-ltv
-
-GROUP_BY bắt buộc có đúng cấu trúc:
-
+FILTER:
 {
-  "action": "GROUP_BY",
-  "field": "province"
+  "action": "FILTER",
+  "field": string,
+  "operator": "EQ" | "NEQ" | "GT" | "GTE" | "LT" | "LTE" | "IN",
+  "value": any
 }
 
-Bắt buộc dùng key "field" ở dạng số ít.
-Không được dùng "fields".
-Không được dùng array cho GROUP_BY field.
-Mỗi GROUP_BY chỉ có đúng một field.
-GROUP_BY fields:
-assetGroup
-province
-valuationUnit
-valuationRisk
+LOOKUP:
+{
+  "action": "LOOKUP",
+  "field": "maTsDg" | "maTsbd" | "cif",
+  "value": any
+}
 
-Metrics:
-COUNT
-TOTAL_VALUATION
-TOTAL_COLLATERAL
-TOTAL_DEBT
+COMPARE:
+{
+  "action": "COMPARE",
+  "field": "gtDinhGia" | "gtBaoDam" | "duNoTsbd" | "ltv"
+}
 
-Quy ước thời gian:
+GROUP_BY:
+{
+  "action": "GROUP_BY",
+  "field": "assetGroup" | "province" | "valuationUnit" | "valuationRisk"
+}
+
+AGGREGATE:
+{
+  "action": "AGGREGATE",
+  "metric": "COUNT" | "TOTAL_VALUATION" | "TOTAL_COLLATERAL" | "TOTAL_DEBT"
+}
+
+SORT:
+{
+  "action": "SORT",
+  "by": "value",
+  "order": "ASC" | "DESC"
+}
+
+LIMIT:
+{
+  "action": "LIMIT",
+  "value": number
+}
+
+Quy tắc:
+- Không dùng FILTER cho thời gian.
+- Thời gian chỉ nằm trong timeContext.
+- GROUP_BY đứng trước AGGREGATE.
+- SORT đứng sau AGGREGATE.
+- LIMIT đứng sau SORT nếu có SORT.
+- COMPARE chỉ dùng với mode RANGE và phải là bước cuối.
+- GROUP_BY chỉ dùng key "field", không dùng "fields".
+- LIMIT chỉ dùng key "value".
+- SORT chỉ dùng key "by": "value".
+- Không tự tạo action, field, metric, operator mới.
+
+Quy đổi kỳ:
 tháng 6/2026 = 2026-06-30
 tháng 7/2026 = 2026-07-31
 tháng 8/2026 = 2026-08-31
 
-COMPARE chỉ dùng với timeContext.mode = "RANGE".
-COMPARE phải là bước cuối.
-GROUP_BY phải đứng trước AGGREGATE.
-SORT phải đứng sau AGGREGATE.
-LIMIT phải đứng sau SORT nếu có SORT.
-
-QUY TẮC TÊN KEY BẮT BUỘC:
-
-FILTER:
-action, field, operator, value
-
-LOOKUP:
-action, field, value
-
-COMPARE:
-action, field
-
-GROUP_BY:
-action, field
-
-AGGREGATE:
-action, metric
-
-SORT:
-action, by, order
-
-LIMIT:
-action, value
-
-Không được tự đổi tên key.
-Không được dùng "fields".
-Không được dùng "count" thay cho "value".
-Nếu không đủ thông tin để tạo Query Plan hợp lệ, trả:
+Nếu thiếu thông tin:
 {
   "error": "INSUFFICIENT_INFORMATION"
 }
 `
-
+const modelStartTime = performance.now()
     const response = await fetch(
       `${GREENNODE_BASE_URL}/chat/completions`,
       {
@@ -244,11 +221,20 @@ Nếu không đủ thông tin để tạo Query Plan hợp lệ, trả:
           ],
 
           temperature: 0,
-          max_tokens: 2048,
+          max_tokens: 512,
           top_p: 0.95,
         }),
       }
     )
+
+    const modelEndTime = performance.now()
+
+const modelDurationMs =
+  modelEndTime - modelStartTime
+
+console.log(
+  `GreenNode model time: ${modelDurationMs.toFixed(0)} ms`
+)
 
     const rawData = await response.json()
 
@@ -284,10 +270,20 @@ Nếu không đủ thông tin để tạo Query Plan hợp lệ, trả:
     
     queryPlan = normalizeQueryPlan(queryPlan)
 
-    return res.json({
-      success: true,
-      queryPlan,
-    })
+console.log(
+  'GreenNode model time:',
+  Math.round(modelDurationMs),
+  'ms'
+)
+
+return res.json({
+  success: true,
+  queryPlan,
+  timing: {
+    modelMs:
+      Math.round(modelDurationMs),
+  },
+})
   } catch (error) {
     console.error(error)
 
