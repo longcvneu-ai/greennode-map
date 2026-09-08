@@ -93,6 +93,32 @@ export function formatQueryAnswer(
       ? ` tại ${provinceFilter.value}`
       : ''
 
+
+     const valuationUnitFilter =
+  queryPlan.steps.find(
+    (step) =>
+      step.action === 'FILTER' &&
+      step.field === 'valuationUnit'
+  )
+  const valuationUnitText =
+  valuationUnitFilter
+    ? ` của ${valuationUnitFilter.value}`
+    : ''
+
+    const assetGroupFilter =
+  queryPlan.steps.find(
+    (step) =>
+      step.action === 'FILTER' &&
+      step.field === 'assetGroup'
+  )
+
+const assetGroupText =
+  assetGroupFilter
+    ? ` ${assetGroupFilter.value}`
+    : ''
+
+
+
   /*
     ===== COMPARE =====
   */
@@ -277,7 +303,7 @@ export function formatQueryAnswer(
       'TOTAL_VALUATION'
     ) {
       return (
-        `Tổng giá trị định giá${provinceText} trong ${formatPeriod(
+       `Tổng giá trị định giá${assetGroupText}${valuationUnitText}${provinceText} trong ${formatPeriod(
           period
         )} là ${formatBillion(
           data.value

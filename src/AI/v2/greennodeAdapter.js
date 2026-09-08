@@ -195,9 +195,12 @@ function extractAssetGroup(
   if (
     normalizedQuestion.includes(
       'bat dong san'
+    ) ||
+    normalizedQuestion.includes(
+      'bds'
     )
   ) {
-    return 'Bất động sản'
+    return 'BĐS'
   }
 
   if (
@@ -210,8 +213,6 @@ function extractAssetGroup(
 
   return null
 }
-
-
 /*
   ======================================================
   DYNAMIC DIMENSION MATCHER
@@ -401,28 +402,22 @@ function detectMetric(
     SỐ TÀI SẢN
   */
 
-  if (
-    normalizedQuestion.includes(
-      'tai san'
-    ) &&
-    (
-      normalizedQuestion.includes(
-        'bao nhieu'
-      ) ||
-      normalizedQuestion.includes(
-        'so tai san'
-      ) ||
-      normalizedQuestion.includes(
-        'dem tai san'
-      ) ||
-      normalizedQuestion.includes(
-        'nhieu tai san'
-      )
-    )
-  ) {
-    return 'COUNT'
-  }
-
+ if (
+  normalizedQuestion.includes(
+    'bao nhieu'
+  ) ||
+  normalizedQuestion.includes(
+    'so tai san'
+  ) ||
+  normalizedQuestion.includes(
+    'dem tai san'
+  ) ||
+  normalizedQuestion.includes(
+    'nhieu tai san'
+  )
+) {
+  return 'COUNT'
+}
   return null
 }
 
@@ -541,6 +536,7 @@ if (!period) {
       normalizedQuestion
     )
 
+  
   if (!metric) {
     return null
   }
