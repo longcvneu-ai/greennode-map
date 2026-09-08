@@ -18,6 +18,7 @@ export const QUERY_PLAN_OPERATORS = {
   LT: 'LT',
   LTE: 'LTE',
   IN: 'IN',
+  EMPTY: 'EMPTY',
 }
 
 export const QUERY_PLAN_SORT_ORDERS = {

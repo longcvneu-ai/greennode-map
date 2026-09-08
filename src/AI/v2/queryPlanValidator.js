@@ -62,31 +62,17 @@ export function validateQueryPlan(plan) {
     }
 
     if (
-      step.action === QUERY_PLAN_ACTIONS.FILTER
-    ) {
-      if (!step.field) {
-        errors.push(
-          `Step ${index + 1}: FILTER phải có field.`
-        )
-      }
+  step.action === QUERY_PLAN_ACTIONS.FILTER
+) {
+  if (!step.field) {
+    errors.push(
+      `Step ${index + 1}: FILTER phải có field.`
+    )
+  }
+   
+}
 
-      if (
-        !isAllowedValue(
-          step.operator,
-          QUERY_PLAN_OPERATORS
-        )
-      ) {
-        errors.push(
-          `Step ${index + 1}: operator không hợp lệ: ${step.operator}`
-        )
-      }
-
-      if (step.value === undefined) {
-        errors.push(
-          `Step ${index + 1}: FILTER phải có value.`
-        )
-      }
-    }
+     
 
     if (
   step.action === QUERY_PLAN_ACTIONS.LOOKUP

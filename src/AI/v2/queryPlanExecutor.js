@@ -14,7 +14,54 @@ import {
 } from '../../services/assetService.js'
 
 
-function compareValue(actualValue, operator, expectedValue) {
+function compareValue(
+  actualValue,
+  operator,
+  expectedValue
+) {
+  /*
+   * Field nhiều giá trị.
+   *
+   * Ví dụ:
+   * valuationRisk:
+   * ['Định giá cao', 'Sai phương pháp']
+   *
+   * cif:
+   * ['CIF001', 'CIF005']
+   */
+  if (Array.isArray(actualValue)) {
+        switch (operator) {
+      case QUERY_PLAN_OPERATORS.EQ:
+        return actualValue.includes(
+          expectedValue
+        )
+
+      case QUERY_PLAN_OPERATORS.NEQ:
+        return !actualValue.includes(
+          expectedValue
+        )
+
+      case QUERY_PLAN_OPERATORS.IN:
+        return (
+          Array.isArray(expectedValue) &&
+          actualValue.some(
+            (value) =>
+              expectedValue.includes(
+                value
+              )
+          )
+        )
+case QUERY_PLAN_OPERATORS.EMPTY:
+  return actualValue.length === 0
+
+      default:
+        return false
+    }
+  }
+
+  /*
+   * Field giá trị đơn.
+   */
   switch (operator) {
     case QUERY_PLAN_OPERATORS.EQ:
       return actualValue === expectedValue
@@ -37,14 +84,15 @@ function compareValue(actualValue, operator, expectedValue) {
     case QUERY_PLAN_OPERATORS.IN:
       return (
         Array.isArray(expectedValue) &&
-        expectedValue.includes(actualValue)
+        expectedValue.includes(
+          actualValue
+        )
       )
 
     default:
       return false
   }
 }
-
 
 function getFieldValue(item, field) {
   switch (field) {
@@ -58,7 +106,14 @@ function getFieldValue(item, field) {
       return item.donViDinhGia
 
     case 'valuationRisk':
-      return item.ruiRoDinhGia
+  return Array.isArray(item.risks)
+    ? item.risks
+        .map(
+          (risk) =>
+            risk.loaiRuiRo
+        )
+        .filter(Boolean)
+    : []
 
     case 'cif':
       return item.cifs

@@ -31,6 +31,10 @@ import {
   formatQueryAnswer,
 } from './AI/v2/queryAnswerFormatter'
 
+import {
+  resolveQueryPlanValues,
+} from './AI/v2/queryValueResolver'
+
 import tsbdLogo from './assets/tsbd-logo.png'
 
 function App() {
@@ -823,13 +827,60 @@ const handleAskAI = async () => {
       try {
         const jobStartTime = performance.now()
 
-        const queryPlan =
-          await createQueryPlanFromGreenNode(
-            job.question
-          )
+        const rawQueryPlan =
+  await createQueryPlanFromGreenNode(
+    job.question
+  )
 
-        const validation =
-          validateQueryPlan(queryPlan)
+  
+
+const resolution =
+  resolveQueryPlanValues(
+    rawQueryPlan,
+    activeDataset
+  )
+  
+
+if (!resolution.success) {
+  const errorMessage =
+    resolution.errors.join(
+      ' | '
+    )
+
+  const failedJob = {
+    ...job,
+    status: 'ERROR',
+    queryPlan:
+      rawQueryPlan,
+    error:
+      errorMessage,
+  }
+
+  completedJobs.push(
+    failedJob
+  )
+
+  setAiJobs(
+    (currentJobs) =>
+      currentJobs.map(
+        (item) =>
+          item.id ===
+          job.id
+            ? failedJob
+            : item
+      )
+  )
+
+  continue
+}
+
+const queryPlan =
+  resolution.queryPlan
+
+const validation =
+  validateQueryPlan(
+    queryPlan
+  )
 
         if (!validation.valid) {
           const errorMessage =
@@ -936,7 +987,8 @@ const handleAskAI = async () => {
           ...job,
           status: 'ERROR',
           error:
-            'Không thể kết nối hoặc xử lý yêu cầu AI.',
+          error?.message ||
+         'Không thể kết nối hoặc xử lý yêu cầu AI.',
         }
 
         completedJobs.push(failedJob)

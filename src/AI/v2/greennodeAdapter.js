@@ -14,6 +14,9 @@
   ->
   "co bao nhieu tai san tai ha noi"
 */
+import {
+  getAssetsByReportingPeriod,
+} from '../../services/assetService'
 
 function normalizeQuestion(value) {
   return String(value || '')
@@ -180,6 +183,162 @@ function extractProvince(
   return null
 }
 
+/*
+  ======================================================
+  ASSET GROUP
+  ======================================================
+*/
+
+function extractAssetGroup(
+  normalizedQuestion
+) {
+  if (
+    normalizedQuestion.includes(
+      'bat dong san'
+    )
+  ) {
+    return 'Bất động sản'
+  }
+
+  if (
+    normalizedQuestion.includes(
+      'dong san'
+    )
+  ) {
+    return 'Động sản'
+  }
+
+  return null
+}
+
+
+/*
+  ======================================================
+  DYNAMIC DIMENSION MATCHER
+  ======================================================
+
+  Lấy giá trị thực tế từ dataset
+  của đúng kỳ báo cáo.
+
+  Hiện dùng cho valuationUnit.
+  Sau này có thể mở rộng cho
+  các dimension động khác.
+*/
+
+function extractDynamicDimension(
+  normalizedQuestion,
+  dataset,
+  period,
+  datasetKey
+) {
+  if (!period) {
+    return null
+  }
+
+  const assets =
+    getAssetsByReportingPeriod(
+      period,
+      dataset
+    )
+
+  const canonicalValues =
+    Array.from(
+      new Set(
+        assets
+          .map(
+            (asset) =>
+              asset?.[datasetKey]
+          )
+          .filter(Boolean)
+      )
+    )
+
+  const matches =
+    canonicalValues.filter(
+      (value) => {
+        const normalizedValue =
+          normalizeQuestion(value)
+
+        return (
+          normalizedValue &&
+          normalizedQuestion.includes(
+            normalizedValue
+          )
+        )
+      }
+    )
+
+  /*
+    Chỉ nhận khi match duy nhất.
+
+    Nếu không có hoặc có nhiều match
+    thì Fast Planner không tự đoán.
+  */
+
+  if (matches.length !== 1) {
+    return null
+  }
+
+  return matches[0]
+}
+
+
+function extractDynamicRisk(
+  normalizedQuestion,
+  dataset,
+  period
+) {
+  if (!period) {
+    return null
+  }
+
+  const assets =
+    getAssetsByReportingPeriod(
+      period,
+      dataset
+    )
+
+  const canonicalValues =
+    Array.from(
+      new Set(
+        assets
+          .flatMap(
+            (asset) =>
+              Array.isArray(
+                asset.risks
+              )
+                ? asset.risks
+                    .map(
+                      (risk) =>
+                        risk.loaiRuiRo
+                    )
+                    .filter(Boolean)
+                : []
+          )
+      )
+    )
+
+  const matches =
+    canonicalValues.filter(
+      (value) => {
+        const normalizedValue =
+          normalizeQuestion(value)
+
+        return (
+          normalizedValue &&
+          normalizedQuestion.includes(
+            normalizedValue
+          )
+        )
+      }
+    )
+
+  if (matches.length !== 1) {
+    return null
+  }
+
+  return matches[0]
+}
 
 /*
   ======================================================
@@ -350,16 +509,21 @@ function createBasePlan(
 */
 
 function tryCreateFastQueryPlan(
-  question
+  question,
+  dataset
 ) {
   const normalizedQuestion =
     normalizeQuestion(question)
 
   const period =
-    extractPeriod(
-      normalizedQuestion
-    )
+  extractPeriod(
+    normalizedQuestion
+  )
 
+if (!period) {
+  return null
+}
+  
   /*
     Fast Planner hiện chỉ xử lý
     SINGLE_PERIOD.
@@ -386,6 +550,47 @@ function tryCreateFastQueryPlan(
       normalizedQuestion
     )
 
+  const assetGroup =
+    extractAssetGroup(
+      normalizedQuestion
+    )
+
+  /*
+    ====================================================
+    VALUATION UNIT - DYNAMIC
+    ====================================================
+
+    Không hard-code:
+    Nội bộ
+    Công ty định giá A
+    Công ty định giá B
+
+    mà đọc trực tiếp từ dataset.
+  */
+
+  const valuationUnit =
+    extractDynamicDimension(
+      normalizedQuestion,
+      dataset,
+      period,
+      'donViDinhGia'
+    )
+
+  const valuationRisk =
+  extractDynamicRisk(
+    normalizedQuestion,
+    dataset,
+    period
+  )
+
+  const hasNoValuationRisk =
+  normalizedQuestion.includes(
+    'khong phat hien'
+  ) &&
+  normalizedQuestion.includes(
+    'rui ro'
+  )
+
   const topN =
     extractTopN(
       normalizedQuestion
@@ -396,11 +601,6 @@ function tryCreateFastQueryPlan(
     ====================================================
     TOP N THEO TỈNH
     ====================================================
-
-    Ví dụ:
-
-    Top 1 tỉnh có dư nợ TSBĐ cao nhất
-    tháng 8/2026
   */
 
   const asksProvinceRanking =
@@ -414,15 +614,11 @@ function tryCreateFastQueryPlan(
     ) &&
     topN !== null
 
-  if (
-    asksProvinceRanking
-  ) {
+  if (asksProvinceRanking) {
     /*
-      Nếu câu vừa yêu cầu ranking
-      vừa chỉ đích danh một tỉnh,
-      Fast Planner không tự suy diễn.
-
-      Để GreenNode xử lý.
+      Nếu vừa ranking
+      vừa chỉ đích danh tỉnh,
+      Fast Planner không suy diễn.
     */
 
     if (province) {
@@ -467,8 +663,7 @@ function tryCreateFastQueryPlan(
 
 
   /*
-    Nếu người dùng chỉ rõ tỉnh:
-    thêm FILTER trước AGGREGATE.
+    PROVINCE
   */
 
   if (province) {
@@ -482,12 +677,55 @@ function tryCreateFastQueryPlan(
 
 
   /*
-    COUNT tài sản
+    ASSET GROUP
   */
 
-  if (
-    metric === 'COUNT'
-  ) {
+  if (assetGroup) {
+    plan.steps.push({
+      action: 'FILTER',
+      field: 'assetGroup',
+      operator: 'EQ',
+      value: assetGroup,
+    })
+  }
+
+
+  /*
+    VALUATION UNIT
+  */
+
+  if (valuationUnit) {
+    plan.steps.push({
+      action: 'FILTER',
+      field: 'valuationUnit',
+      operator: 'EQ',
+      value: valuationUnit,
+    })
+  }
+
+ if (hasNoValuationRisk) {
+  plan.steps.push({
+    action: 'FILTER',
+    field: 'valuationRisk',
+    operator: 'EMPTY',
+  })
+} else if (valuationRisk) {
+  plan.steps.push({
+    action: 'FILTER',
+    field: 'valuationRisk',
+    operator: 'EQ',
+    value: valuationRisk,
+  })
+}
+
+
+  /*
+    ====================================================
+    COUNT
+    ====================================================
+  */
+
+  if (metric === 'COUNT') {
     plan.steps.push({
       action: 'AGGREGATE',
       metric: 'COUNT',
@@ -498,7 +736,9 @@ function tryCreateFastQueryPlan(
 
 
   /*
-    TOTAL_COLLATERAL
+    ====================================================
+    TOTAL COLLATERAL
+    ====================================================
   */
 
   if (
@@ -516,10 +756,9 @@ function tryCreateFastQueryPlan(
 
 
   /*
-    TOTAL_DEBT
-
-    Chỉ fast-path khi câu có
-    ý tổng hợp rõ ràng.
+    ====================================================
+    TOTAL DEBT
+    ====================================================
   */
 
   if (
@@ -536,9 +775,7 @@ function tryCreateFastQueryPlan(
         'du no tsbd'
       )
 
-    if (
-      !clearAggregateIntent
-    ) {
+    if (!clearAggregateIntent) {
       return null
     }
 
@@ -552,7 +789,9 @@ function tryCreateFastQueryPlan(
 
 
   /*
-    TOTAL_VALUATION
+    ====================================================
+    TOTAL VALUATION
+    ====================================================
   */
 
   if (
@@ -564,15 +803,19 @@ function tryCreateFastQueryPlan(
         'tong gia tri dinh gia'
       ) ||
       normalizedQuestion.includes(
+        'tong gt dinh gia'
+      ) ||
+      normalizedQuestion.includes(
         'bao nhieu'
       ) ||
       normalizedQuestion.includes(
         'gia tri dinh gia'
+      ) ||
+      normalizedQuestion.includes(
+        'gt dinh gia'
       )
 
-    if (
-      !clearAggregateIntent
-    ) {
+    if (!clearAggregateIntent) {
       return null
     }
 
@@ -650,13 +893,16 @@ async function createQueryPlanFromModel(
 */
 
 export async function createQueryPlanFromGreenNode(
-  question
+  question,
+  dataset
 ) {
   const fastPlan =
-    tryCreateFastQueryPlan(
-      question
-    )
+  tryCreateFastQueryPlan(
+    question,
+    dataset
+  )
 
+  
   /*
     FAST PATH
   */
