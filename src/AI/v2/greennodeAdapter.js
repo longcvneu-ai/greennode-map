@@ -551,17 +551,7 @@ if (!period) {
   return null
 }
 
-  /*
-    Fast Planner hiện chỉ xử lý
-    SINGLE_PERIOD.
-
-    Không có period rõ ràng:
-    trả về null để AI xử lý.
-  */
-
-  if (!period) {
-    return null
-  }
+  
 
 /*
   ====================================================
@@ -997,10 +987,10 @@ export async function createQueryPlanFromGreenNode(
   */
 
   if (fastPlan) {
-    console.log(
-      'GREENNODE PLANNER: FAST',
-      fastPlan
-    )
+    //console.log(
+     // 'GREENNODE PLANNER: FAST',
+     // fastPlan
+    //)
 
     return fastPlan
   }
@@ -1010,9 +1000,9 @@ export async function createQueryPlanFromGreenNode(
     AI FALLBACK
   */
 
-  console.log(
-    'GREENNODE PLANNER: AI FALLBACK'
-  )
+  //console.log(
+    //'GREENNODE PLANNER: AI FALLBACK'
+  //)
 
   return createQueryPlanFromModel(
     question
