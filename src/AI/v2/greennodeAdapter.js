@@ -141,7 +141,39 @@ function extractPeriod(
 
   return null
 }
+function extractComparePeriods(
+  normalizedQuestion
+) {
+  const matches = [
+    ...normalizedQuestion.matchAll(
+      /thang\s+(\d{1,2})\s*\/\s*(\d{4})/g
+    ),
+  ]
 
+  if (matches.length < 2) {
+    return null
+  }
+
+  const periods = matches
+    .slice(0, 2)
+    .map((match) => {
+      const month =
+        Number(match[1])
+
+      const year =
+        Number(match[2])
+
+      return getMonthEndPeriod(
+        year,
+        month
+      )
+    })
+
+  return {
+    fromPeriod: periods[0],
+    toPeriod: periods[1],
+  }
+}
 
 /*
   ======================================================
@@ -518,7 +550,7 @@ function tryCreateFastQueryPlan(
 if (!period) {
   return null
 }
-  
+
   /*
     Fast Planner hiện chỉ xử lý
     SINGLE_PERIOD.
@@ -530,6 +562,67 @@ if (!period) {
   if (!period) {
     return null
   }
+
+/*
+  ====================================================
+  COMPARE GIỮA HAI KỲ
+  ====================================================
+*/
+
+const asksCompare =
+  normalizedQuestion.includes(
+    'so sanh'
+  )
+
+if (asksCompare) {
+  const comparePeriods =
+    extractComparePeriods(
+      normalizedQuestion
+    )
+
+  if (!comparePeriods) {
+    return null
+  }
+
+  const valuationCodeMatch =
+    normalizedQuestion.match(
+      /\bdg\d+\b/i
+    )
+
+  if (!valuationCodeMatch) {
+    return null
+  }
+
+  const valuationCode =
+    valuationCodeMatch[0]
+      .toUpperCase()
+
+  return {
+    version: '2.0',
+
+    timeContext: {
+      mode: 'RANGE',
+      period: null,
+      fromPeriod:
+        comparePeriods.fromPeriod,
+      toPeriod:
+        comparePeriods.toPeriod,
+    },
+
+    steps: [
+      {
+        action: 'LOOKUP',
+        field: 'maTsDg',
+        value: valuationCode,
+      },
+      {
+        action: 'COMPARE',
+        field: 'gtDinhGia',
+      },
+    ],
+  }
+}
+
 
   const metric =
     detectMetric(
