@@ -789,7 +789,6 @@ const handleAskAI = async () => {
     return
   }
 
-  const batchStartTime = performance.now()
 
   const initialJobs = questions.map(
     (item, index) => ({
@@ -971,11 +970,7 @@ const validation =
           )
         )
 
-        console.log(
-          'AI QUESTION COMPLETE:',
-          job.question,
-          `${successJob.durationMs} ms`
-        )
+       
       } catch (error) {
   console.error(
     'GreenNode AI job error:',
@@ -1056,24 +1051,8 @@ const validation =
       )
     }
 
-    const batchEndTime =
-      performance.now()
-
-    console.log(
-      'AI BATCH COMPLETE:',
-      {
-        totalQuestions:
-          questions.length,
-        success:
-          successfulJobs.length,
-        failed:
-          failedJobs.length,
-        totalMs: Math.round(
-          batchEndTime -
-            batchStartTime
-        ),
-      }
-    )
+   
+    
   } finally {
     setAiLoading(false)
   }
