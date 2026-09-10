@@ -829,9 +829,9 @@ const handleAskAI = async () => {
 
         const rawQueryPlan =
   await createQueryPlanFromGreenNode(
-    job.question
+    job.question,
+    activeDataset
   )
-
   
 
 const resolution =
@@ -2304,15 +2304,15 @@ const handleViewAssetDetail = (asset) => {
                         <tr>
                           <td>
                             {aggregateStep.metric ===
-                            'TOTAL_DEBT'
-                              ? 'Dư nợ TSBĐ'
-                              : aggregateStep.metric ===
-                                'TOTAL_VALUATION'
-                              ? 'Tổng GT định giá'
-                              : aggregateStep.metric ===
-                                'TOTAL_COLLATERAL'
-                              ? 'Tổng GT bảo đảm'
-                              : 'Số lượng'}
+                              'TOTAL_DEBT'
+                                ? 'Dư nợ TSBĐ'
+                                : aggregateStep.metric ===
+                                  'TOTAL_VALUATION'
+                                ? 'Tổng GT định giá'
+                                : aggregateStep.metric ===
+                                  'TOTAL_COLLATERAL'
+                                ? 'Số TSBĐ'
+                                : 'Số lượng'}
                           </td>
 
                           <td>
@@ -2320,9 +2320,7 @@ const handleViewAssetDetail = (asset) => {
                               {aggregateStep.metric ===
                                 'TOTAL_DEBT' ||
                               aggregateStep.metric ===
-                                'TOTAL_VALUATION' ||
-                              aggregateStep.metric ===
-                                'TOTAL_COLLATERAL'
+                                'TOTAL_VALUATION'
                                 ? formatBillion(
                                     data.value
                                   )

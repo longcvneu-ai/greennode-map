@@ -41,6 +41,17 @@ export function validateQueryPlan(plan) {
     }
   }
 
+if (plan.steps.length === 0) {
+  errors.push(
+    'Query Plan phải có ít nhất 1 step.'
+  )
+
+  return {
+    valid: false,
+    errors,
+  }
+}
+
   plan.steps.forEach((step, index) => {
     if (!step || typeof step !== 'object') {
       errors.push(

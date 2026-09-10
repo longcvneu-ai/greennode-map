@@ -192,6 +192,39 @@ function aggregateData(data, metric) {
     }
   }
 
+  if (metric === 'TOTAL_COLLATERAL') {
+  if (isGrouped) {
+    return data.map((group) => {
+      const activeCollateralItems =
+        group.items.filter(
+          (item) =>
+            item.isActiveCollateral === true
+        )
+
+      return {
+        key: group.key,
+        value:
+          activeCollateralItems.length,
+        recordCount:
+          activeCollateralItems.length,
+      }
+    })
+  }
+
+  const activeCollateralItems =
+    data.filter(
+      (item) =>
+        item.isActiveCollateral === true
+    )
+
+  return {
+    value:
+      activeCollateralItems.length,
+    recordCount:
+      activeCollateralItems.length,
+  }
+}
+
   if (metric === 'TOTAL_DEBT') {
     if (isGrouped) {
       return data.map((group) => {

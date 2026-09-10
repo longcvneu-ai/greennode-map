@@ -311,6 +311,18 @@ const assetGroupText =
       )
     }
 
+
+    if (
+  aggregateStep.metric ===
+  'TOTAL_COLLATERAL'
+) {
+  return (
+    `Có ${data.value} TSBĐ đang bảo đảm${provinceText} trong ${formatPeriod(
+      period
+    )}.`
+  )
+}
+
     if (
       aggregateStep.metric ===
       'COUNT'

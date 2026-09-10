@@ -160,6 +160,41 @@ AGGREGATE:
   "metric": "COUNT" | "TOTAL_VALUATION" | "TOTAL_COLLATERAL" | "TOTAL_DEBT"
 }
 
+Quy tắc chọn metric:
+
+- COUNT:
+  Dùng khi người dùng hỏi số lượng tài sản.
+  Ví dụ:
+  "Có bao nhiêu tài sản..."
+  "Số tài sản..."
+
+- TOTAL_COLLATERAL:
+  Dùng khi người dùng hỏi về số lượng / tình hình TSBĐ đang bảo đảm.
+  Các cụm như:
+  "tài sản bảo đảm"
+  "TSBĐ"
+  "tình hình tài sản bảo đảm"
+  nếu không hỏi giá trị tiền thì ưu tiên TOTAL_COLLATERAL.
+
+- TOTAL_VALUATION:
+  Chỉ dùng khi người dùng hỏi rõ về:
+  "giá trị định giá"
+  "GT định giá"
+  "tổng giá trị định giá"
+
+- TOTAL_DEBT:
+  Chỉ dùng khi người dùng hỏi rõ về:
+  "dư nợ"
+  "dư nợ TSBĐ"
+  "tổng dư nợ"
+
+Không được suy diễn:
+- "tài sản bảo đảm" = "giá trị định giá"
+- "TSBĐ" = "giá trị định giá"
+
+Nếu câu hỏi nói "tình hình tài sản bảo đảm" mà không nhắc đến giá trị định giá hoặc dư nợ:
+→ dùng AGGREGATE metric = TOTAL_COLLATERAL.
+
 SORT:
 {
   "action": "SORT",
