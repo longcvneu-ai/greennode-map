@@ -977,30 +977,40 @@ const validation =
           `${successJob.durationMs} ms`
         )
       } catch (error) {
-        console.error(
-          'GreenNode AI job error:',
-          job.question,
-          error
-        )
+  console.error(
+    'GreenNode AI job error:',
+    job.question,
+    error
+  )
 
-        const failedJob = {
-          ...job,
-          status: 'ERROR',
-          error:
-          error?.message ||
-         'Không thể kết nối hoặc xử lý yêu cầu AI.',
-        }
+  const isConnectionError =
+    error instanceof TypeError &&
+    error?.message ===
+      'Failed to fetch'
 
-        completedJobs.push(failedJob)
+  const userErrorMessage =
+    isConnectionError
+      ? 'Không thể kết nối tới dịch vụ AI. Vui lòng thử lại sau.'
+      : 'Không thể xử lý yêu cầu AI. Vui lòng thử lại.'
 
-        setAiJobs((currentJobs) =>
-          currentJobs.map((item) =>
-            item.id === job.id
-              ? failedJob
-              : item
-          )
-        )
-      }
+  const failedJob = {
+    ...job,
+    status: 'ERROR',
+    error: userErrorMessage,
+  }
+
+  completedJobs.push(
+    failedJob
+  )
+
+  setAiJobs((currentJobs) =>
+    currentJobs.map((item) =>
+      item.id === job.id
+        ? failedJob
+        : item
+    )
+  )
+}
     }
 
     const successfulJobs =
