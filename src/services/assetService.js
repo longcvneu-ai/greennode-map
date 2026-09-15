@@ -1,10 +1,10 @@
-import { customers as mockCustomers } from '../data/customers'
-import { valuationSnapshots as mockValuationSnapshots } from '../data/valuationSnapshots'
-import { valuationAssets as mockValuationAssets } from '../data/valuationAssets'
-import { collateralAssets as mockCollateralAssets } from '../data/collateralAssets'
-import { valuationRisks as mockValuationRisks } from '../data/valuationRisks'
-import { collateralSnapshots as mockCollateralSnapshots } from '../data/collateralSnapshots'
-import { collateralCustomers as mockCollateralCustomers } from '../data/collateralCustomers'
+import { customers as mockCustomers } from '../data/customers.js'
+import { valuationSnapshots as mockValuationSnapshots } from '../data/valuationSnapshots.js'
+import { valuationAssets as mockValuationAssets } from '../data/valuationAssets.js'
+import { collateralAssets as mockCollateralAssets } from '../data/collateralAssets.js'
+import { valuationRisks as mockValuationRisks } from '../data/valuationRisks.js'
+import { collateralSnapshots as mockCollateralSnapshots } from '../data/collateralSnapshots.js'
+import { collateralCustomers as mockCollateralCustomers } from '../data/collateralCustomers.js'
 
 
 /*
@@ -13,7 +13,23 @@ import { collateralCustomers as mockCollateralCustomers } from '../data/collater
  * Nếu App không truyền dataset vào,
  * assetService vẫn dùng MOCK như hiện tại.
  */
-const MOCK_DATASET = {
+
+/*
+ * PERFORMANCE V2.6.7 FINAL
+ * Cache các projection theo đúng object dataset + kỳ báo cáo.
+ * Dataset trong App được thay bằng object mới sau mỗi lần import, vì vậy
+ * WeakMap tự tách cache giữa MOCK / Excel và không giữ bộ nhớ khi dataset
+ * không còn được dùng.
+ */
+const baseAssetsCache = new WeakMap()
+const periodAssetsCache = new WeakMap()
+const reportingPeriodsCache = new WeakMap()
+
+function canCacheDataset(dataset) {
+  return dataset && (typeof dataset === 'object' || typeof dataset === 'function')
+}
+
+export const MOCK_DATASET = {
   valuationAssets: mockValuationAssets,
   valuationSnapshots: mockValuationSnapshots,
   collateralAssets: mockCollateralAssets,
@@ -27,6 +43,10 @@ const MOCK_DATASET = {
 export function getAssets(
   dataset = MOCK_DATASET
 ) {
+  if (canCacheDataset(dataset) && baseAssetsCache.has(dataset)) {
+    return baseAssetsCache.get(dataset)
+  }
+
   const {
     valuationAssets = [],
     collateralAssets = [],
@@ -35,53 +55,100 @@ export function getAssets(
     valuationRisks = [],
   } = dataset
 
-  return valuationAssets.map(
+  /*
+   * PERFORMANCE V2.6
+   *
+   * Trước đây mỗi tài sản lại .find()/.filter() trên toàn bộ dataset,
+   * làm độ phức tạp tăng gần O(n²). Với 30.000 tài sản đây là nút thắt lớn.
+   * Tạo index Map một lần rồi lookup O(1) cho từng tài sản.
+   */
+  const collateralByValuationRecordId = new Map()
+  collateralAssets.forEach((item) => {
+    if (
+      item.valuationRecordId &&
+      !collateralByValuationRecordId.has(
+        item.valuationRecordId
+      )
+    ) {
+      collateralByValuationRecordId.set(
+        item.valuationRecordId,
+        item
+      )
+    }
+  })
+
+  const relationsByCollateralRecordId = new Map()
+  collateralCustomers.forEach((item) => {
+    if (!item.collateralRecordId) return
+    if (
+      !relationsByCollateralRecordId.has(
+        item.collateralRecordId
+      )
+    ) {
+      relationsByCollateralRecordId.set(
+        item.collateralRecordId,
+        []
+      )
+    }
+    relationsByCollateralRecordId
+      .get(item.collateralRecordId)
+      .push(item)
+  })
+
+  const customerByCif = new Map(
+    customers.map((item) => [item.cif, item])
+  )
+
+  const risksByValuationRecordId = new Map()
+  valuationRisks.forEach((item) => {
+    if (!item.valuationRecordId) return
+    if (
+      !risksByValuationRecordId.has(
+        item.valuationRecordId
+      )
+    ) {
+      risksByValuationRecordId.set(
+        item.valuationRecordId,
+        []
+      )
+    }
+    risksByValuationRecordId
+      .get(item.valuationRecordId)
+      .push(item)
+  })
+
+  const projectedAssets = valuationAssets.map(
     (valuationAsset) => {
       const collateral =
-        collateralAssets.find(
-          (item) =>
-            item.valuationRecordId ===
-            valuationAsset.recordId
-        )
+        collateralByValuationRecordId.get(
+          valuationAsset.recordId
+        ) || null
 
       const customerRelations =
         collateral
-          ? collateralCustomers.filter(
-              (item) =>
-                item.collateralRecordId ===
-                collateral.recordId
-            )
+          ? relationsByCollateralRecordId.get(
+              collateral.recordId
+            ) || []
           : []
 
       const customerDetails =
-        customerRelations.map(
-          (relation) => {
-            const customer =
-              customers.find(
-                (item) =>
-                  item.cif === relation.cif
-              )
+        customerRelations.map((relation) => {
+          const customer =
+            customerByCif.get(relation.cif)
 
-            return {
-              ...relation,
-
-              tenKhachHang:
-                customer?.tenKhachHang ??
-                null,
-
-              loaiKhachHang:
-                customer?.loaiKhachHang ??
-                null,
-            }
+          return {
+            ...relation,
+            tenKhachHang:
+              customer?.tenKhachHang ?? null,
+            loaiKhachHang:
+              customer?.loaiKhachHang ?? null,
           }
-        )
+        })
 
       const risks =
-        valuationRisks.filter(
-          (item) =>
-            item.valuationRecordId ===
-            valuationAsset.recordId
-        )
+        risksByValuationRecordId.get(
+          valuationAsset.recordId
+        ) || []
 
       const ltv =
         collateral &&
@@ -92,52 +159,35 @@ export function getAssets(
 
       return {
         ...valuationAsset,
-
-        maTsbd:
-          collateral?.maTsbd ?? null,
-
-        cifs:
-          customerRelations.map(
-            (item) => item.cif
-          ),
-
+        maTsbd: collateral?.maTsbd ?? null,
+        cifs: customerRelations.map(
+          (item) => item.cif
+        ),
         customers: customerDetails,
-
         ngayNhanTsbd:
-          collateral?.ngayNhanTsbd ??
-          null,
-
-        gtBaoDam:
-          collateral?.gtBaoDam ?? 0,
-
-        duNoTsbd:
-          collateral?.duNoTsbd ?? 0,
-
+          collateral?.ngayNhanTsbd ?? null,
+        gtBaoDam: collateral?.gtBaoDam ?? 0,
+        duNoTsbd: collateral?.duNoTsbd ?? 0,
         ltv,
-
         thanhKhoan:
-          collateral?.thanhKhoan ??
-          null,
-
+          collateral?.thanhKhoan ?? null,
         trangThaiTsbd:
-          collateral?.trangThaiTsbd ??
-          null,
-
+          collateral?.trangThaiTsbd ?? null,
         ngayGiaiChap:
-          collateral?.ngayGiaiChap ??
-          null,
-
+          collateral?.ngayGiaiChap ?? null,
         donViQuanLy:
-          collateral?.donViQuanLy ??
-          null,
-
+          collateral?.donViQuanLy ?? null,
         risks,
-
-        coRuiRoDinhGia:
-          risks.length > 0,
+        coRuiRoDinhGia: risks.length > 0,
       }
     }
   )
+
+  if (canCacheDataset(dataset)) {
+    baseAssetsCache.set(dataset, projectedAssets)
+  }
+
+  return projectedAssets
 }
 
 
@@ -168,6 +218,10 @@ export function getAssetById(
 export function getReportingPeriods(
   dataset = MOCK_DATASET
 ) {
+  if (canCacheDataset(dataset) && reportingPeriodsCache.has(dataset)) {
+    return reportingPeriodsCache.get(dataset)
+  }
+
   const {
     valuationSnapshots = [],
     collateralSnapshots = [],
@@ -188,9 +242,15 @@ export function getReportingPeriods(
     ),
   ].filter(Boolean)
 
-  return [
+  const result = [
     ...new Set(periods),
   ].sort()
+
+  if (canCacheDataset(dataset)) {
+    reportingPeriodsCache.set(dataset, result)
+  }
+
+  return result
 }
 
 
@@ -198,6 +258,14 @@ export function getAssetsByReportingPeriod(
   kyBaoCao,
   dataset = MOCK_DATASET
 ) {
+  const cacheKey = kyBaoCao ?? '__NO_PERIOD__'
+  if (canCacheDataset(dataset)) {
+    const datasetCache = periodAssetsCache.get(dataset)
+    if (datasetCache?.has(cacheKey)) {
+      return datasetCache.get(cacheKey)
+    }
+  }
+
   const {
     valuationSnapshots = [],
     collateralAssets = [],
@@ -207,22 +275,114 @@ export function getAssetsByReportingPeriod(
     customers = [],
   } = dataset
 
-  const assets =
-    getAssets(dataset)
+  const assets = getAssets(dataset)
 
-  const periodValuationSnapshots =
-    valuationSnapshots.filter(
-      (item) =>
-        item.kyBaoCao === kyBaoCao
-    )
+  /*
+   * PERFORMANCE V2.6
+   * Tạo index cho đúng kỳ một lần, thay vì .find/.filter toàn bộ mảng
+   * cho từng tài sản.
+   */
+  const valuationSnapshotByRecordId = new Map()
+  valuationSnapshots.forEach((item) => {
+    if (
+      item.kyBaoCao === kyBaoCao &&
+      item.valuationRecordId
+    ) {
+      valuationSnapshotByRecordId.set(
+        item.valuationRecordId,
+        item
+      )
+    }
+  })
 
-  return assets
+  const periodRisksByRecordId = new Map()
+  valuationRisks.forEach((item) => {
+    if (
+      item.kyBaoCao !== kyBaoCao ||
+      !item.valuationRecordId
+    ) {
+      return
+    }
+    if (
+      !periodRisksByRecordId.has(
+        item.valuationRecordId
+      )
+    ) {
+      periodRisksByRecordId.set(
+        item.valuationRecordId,
+        []
+      )
+    }
+    periodRisksByRecordId
+      .get(item.valuationRecordId)
+      .push(item)
+  })
+
+  const collateralByValuationRecordId = new Map()
+  collateralAssets.forEach((item) => {
+    if (
+      item.valuationRecordId &&
+      !collateralByValuationRecordId.has(
+        item.valuationRecordId
+      )
+    ) {
+      collateralByValuationRecordId.set(
+        item.valuationRecordId,
+        item
+      )
+    }
+  })
+
+  const snapshotByCollateralRecordId = new Map()
+  collateralSnapshots.forEach((item) => {
+    if (
+      item.kyBaoCao === kyBaoCao &&
+      item.collateralRecordId
+    ) {
+      snapshotByCollateralRecordId.set(
+        item.collateralRecordId,
+        item
+      )
+    }
+  })
+
+  const relationsByCollateralRecordId = new Map()
+  collateralCustomers.forEach((item) => {
+    if (!item.collateralRecordId) return
+    const inPeriod =
+      (item.tuNgay === null ||
+        item.tuNgay === undefined ||
+        item.tuNgay <= kyBaoCao) &&
+      (item.denNgay === null ||
+        item.denNgay === undefined ||
+        item.denNgay >= kyBaoCao)
+
+    if (!inPeriod) return
+
+    if (
+      !relationsByCollateralRecordId.has(
+        item.collateralRecordId
+      )
+    ) {
+      relationsByCollateralRecordId.set(
+        item.collateralRecordId,
+        []
+      )
+    }
+    relationsByCollateralRecordId
+      .get(item.collateralRecordId)
+      .push(item)
+  })
+
+  const customerByCif = new Map(
+    customers.map((item) => [item.cif, item])
+  )
+
+  const result = assets
     .map((asset) => {
       const valuationSnapshot =
-        periodValuationSnapshots.find(
-          (item) =>
-            item.valuationRecordId ===
-            asset.recordId
+        valuationSnapshotByRecordId.get(
+          asset.recordId
         )
 
       if (!valuationSnapshot) {
@@ -230,122 +390,70 @@ export function getAssetsByReportingPeriod(
       }
 
       const periodRisks =
-        valuationRisks.filter(
-          (item) =>
-            item.kyBaoCao === kyBaoCao &&
-            item.valuationRecordId ===
-              asset.recordId
-        )
+        periodRisksByRecordId.get(
+          asset.recordId
+        ) || []
 
       const collateral =
-        collateralAssets.find(
-          (item) =>
-            item.valuationRecordId ===
-            asset.recordId
-        )
+        collateralByValuationRecordId.get(
+          asset.recordId
+        ) || null
 
       const periodCustomers =
         collateral
-          ? collateralCustomers.filter(
-              (item) =>
-                item.collateralRecordId ===
-                  collateral.recordId &&
-                (
-                  item.tuNgay === null ||
-                  item.tuNgay === undefined ||
-                  item.tuNgay <= kyBaoCao
-                ) &&
-                (
-                  item.denNgay === null ||
-                  item.denNgay === undefined ||
-                  item.denNgay >= kyBaoCao
-                )
-            )
+          ? relationsByCollateralRecordId.get(
+              collateral.recordId
+            ) || []
           : []
 
       const periodCustomerDetails =
-        periodCustomers.map(
-          (relation) => {
-            const customer =
-              customers.find(
-                (item) =>
-                  item.cif === relation.cif
-              )
+        periodCustomers.map((relation) => {
+          const customer =
+            customerByCif.get(relation.cif)
 
-            return {
-              ...relation,
-
-              tenKhachHang:
-                customer?.tenKhachHang ??
-                null,
-
-              loaiKhachHang:
-                customer?.loaiKhachHang ??
-                null,
-            }
+          return {
+            ...relation,
+            tenKhachHang:
+              customer?.tenKhachHang ?? null,
+            loaiKhachHang:
+              customer?.loaiKhachHang ?? null,
           }
-        )
+        })
 
       const snapshot =
         collateral
-          ? collateralSnapshots.find(
-              (item) =>
-                item.kyBaoCao ===
-                  kyBaoCao &&
-                item.collateralRecordId ===
-                  collateral.recordId
-            )
+          ? snapshotByCollateralRecordId.get(
+              collateral.recordId
+            ) || null
           : null
 
-      /*
-       * Không có snapshot TSBĐ tại kỳ này:
-       * tài sản vẫn tồn tại trong dữ liệu định giá,
-       * nhưng không mang dữ liệu TSBĐ
-       * của kỳ khác sang.
-       */
       if (!snapshot) {
         return {
           ...asset,
-
           gtDinhGia:
             valuationSnapshot.gtDinhGia,
-
           ngayDinhGia:
             valuationSnapshot.ngayDinhGia,
-
           donViDinhGia:
             valuationSnapshot.donViDinhGia,
-
           maTsbd: null,
-
           cifs: [],
           customers: [],
-
           ngayNhanTsbd: null,
-
           gtBaoDam: 0,
           duNoTsbd: 0,
           ltv: null,
-
           thanhKhoan: null,
           trangThaiTsbd: null,
           ngayGiaiChap: null,
           donViQuanLy: null,
-
           isActiveCollateral: false,
-
           risks: periodRisks,
-
           coRuiRoDinhGia:
             periodRisks.length > 0,
         }
       }
 
-      /*
-       * Có snapshot TSBĐ:
-       * định giá lấy đúng kỳ,
-       * TSBĐ lấy đúng snapshot cùng kỳ.
-       */
       const ltv =
         valuationSnapshot.gtDinhGia > 0
           ? snapshot.gtBaoDam /
@@ -354,66 +462,66 @@ export function getAssetsByReportingPeriod(
 
       return {
         ...asset,
-
         gtDinhGia:
           valuationSnapshot.gtDinhGia,
-
         ngayDinhGia:
           valuationSnapshot.ngayDinhGia,
-
         donViDinhGia:
           valuationSnapshot.donViDinhGia,
-
-        maTsbd:
-          snapshot.maTsbd,
-
-        cifs:
-          periodCustomers.map(
-            (item) => item.cif
-          ),
-
-        customers:
-          periodCustomerDetails,
-
+        maTsbd: snapshot.maTsbd,
+        cifs: periodCustomers.map(
+          (item) => item.cif
+        ),
+        customers: periodCustomerDetails,
         ngayNhanTsbd:
           snapshot.ngayNhanTsbd ??
           collateral?.ngayNhanTsbd ??
           null,
-
-        gtBaoDam:
-          snapshot.gtBaoDam,
-
-        duNoTsbd:
-          snapshot.duNoTsbd,
-
+        gtBaoDam: snapshot.gtBaoDam ?? 0,
+        duNoTsbd: snapshot.duNoTsbd ?? 0,
         ltv,
-
         thanhKhoan:
-          snapshot.thanhKhoan,
-
+          snapshot.thanhKhoan ?? null,
         trangThaiTsbd:
-          snapshot.trangThaiTsbd,
-
+          snapshot.trangThaiTsbd ?? null,
         ngayGiaiChap:
           snapshot.ngayGiaiChap ??
           collateral?.ngayGiaiChap ??
           null,
-
-        isActiveCollateral:
-          snapshot.trangThaiTsbd ===
-          'Đang bảo đảm',
-
         donViQuanLy:
-          snapshot.donViQuanLy,
-
+          snapshot.donViQuanLy ?? null,
+        isActiveCollateral:
+          snapshot.trangThaiTsbd !==
+            'Đã giải chấp',
         risks: periodRisks,
-
         coRuiRoDinhGia:
           periodRisks.length > 0,
       }
     })
     .filter(Boolean)
+
+  if (canCacheDataset(dataset)) {
+    let datasetCache = periodAssetsCache.get(dataset)
+    if (!datasetCache) {
+      datasetCache = new Map()
+      periodAssetsCache.set(dataset, datasetCache)
+    }
+    datasetCache.set(cacheKey, result)
+  }
+
+  return result
 }
+
+export function getCurrentAssets(
+  dataset = MOCK_DATASET
+) {
+  return getAssetsByReportingPeriod(
+    undefined,
+    dataset
+  )
+}
+
+
 export function getCollateralSnapshotByPeriodAndAsset(
   maTsDg,
   kyBaoCao,

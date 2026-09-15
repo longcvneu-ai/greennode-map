@@ -11,6 +11,7 @@ import {
 
 import {
   getAssetsByReportingPeriod,
+  getReportingPeriods,
 } from '../../services/assetService.js'
 
 
@@ -30,7 +31,7 @@ function compareValue(
    * ['CIF001', 'CIF005']
    */
   if (Array.isArray(actualValue)) {
-        switch (operator) {
+    switch (operator) {
       case QUERY_PLAN_OPERATORS.EQ:
         return actualValue.includes(
           expectedValue
@@ -51,8 +52,12 @@ function compareValue(
               )
           )
         )
-case QUERY_PLAN_OPERATORS.EMPTY:
-  return actualValue.length === 0
+
+      case QUERY_PLAN_OPERATORS.EMPTY:
+        return actualValue.length === 0
+
+      case QUERY_PLAN_OPERATORS.NOT_EMPTY:
+        return actualValue.length > 0
 
       default:
         return false
@@ -89,6 +94,20 @@ case QUERY_PLAN_OPERATORS.EMPTY:
         )
       )
 
+    case QUERY_PLAN_OPERATORS.EMPTY:
+      return (
+        actualValue === undefined ||
+        actualValue === null ||
+        actualValue === ''
+      )
+
+    case QUERY_PLAN_OPERATORS.NOT_EMPTY:
+      return (
+        actualValue !== undefined &&
+        actualValue !== null &&
+        actualValue !== ''
+      )
+
     default:
       return false
   }
@@ -101,6 +120,9 @@ function getFieldValue(item, field) {
 
     case 'assetGroup':
       return item.nhomTsCap1
+
+    case 'assetType':
+      return item.loaiTsCap2
 
     case 'valuationUnit':
       return item.donViDinhGia
@@ -118,6 +140,9 @@ function getFieldValue(item, field) {
     case 'cif':
       return item.cifs
 
+    case 'queryPeriod':
+      return item.queryPeriod
+
     default:
       return item[field]
   }
@@ -127,22 +152,20 @@ function groupData(data, field) {
   const groups = new Map()
 
   data.forEach((item) => {
-    const key = getFieldValue(item, field)
+    const rawKey = getFieldValue(item, field)
+    const keys = Array.isArray(rawKey) ? rawKey : [rawKey]
 
-    if (!groups.has(key)) {
-      groups.set(key, [])
-    }
-
-    groups.get(key).push(item)
+    keys.filter((key) => key !== undefined && key !== null && key !== '').forEach((key) => {
+      if (!groups.has(key)) groups.set(key, [])
+      groups.get(key).push(item)
+    })
   })
 
-  return Array.from(groups.entries()).map(
-    ([key, items]) => ({
-      key,
-      items,
-      recordCount: items.length,
-    })
-  )
+  return Array.from(groups.entries()).map(([key, items]) => ({
+    key,
+    items,
+    recordCount: items.length,
+  }))
 }
 
 function aggregateData(data, metric) {
@@ -164,6 +187,73 @@ function aggregateData(data, metric) {
       value: data.length,
       recordCount: data.length,
     }
+  }
+
+  if (metric === 'RISK_CASE_COUNT') {
+    const countRiskCases = (items) =>
+      items.reduce(
+        (sum, item) =>
+          sum + (Array.isArray(item.risks) ? item.risks.length : 0),
+        0
+      )
+
+    if (isGrouped) {
+      return data.map((group) => ({
+        key: group.key,
+        value: countRiskCases(group.items),
+        recordCount: group.items.length,
+      }))
+    }
+
+    return {
+      value: countRiskCases(data),
+      recordCount: data.length,
+    }
+  }
+
+  const numericAggregate = (items, field, mode) => {
+    const values = items
+      .map((item) => getFieldValue(item, field))
+      .filter((value) => value !== null && value !== undefined && value !== '')
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value))
+
+    if (values.length === 0) return { value: null, recordCount: 0 }
+
+    let value
+    if (mode === 'AVG') value = values.reduce((sum, item) => sum + item, 0) / values.length
+    if (mode === 'SUM') value = values.reduce((sum, item) => sum + item, 0)
+    if (mode === 'MAX') value = Math.max(...values)
+    if (mode === 'MIN') value = Math.min(...values)
+
+    return { value, recordCount: values.length }
+  }
+
+  const numericMetricConfig = {
+    AVG_VALUATION: ['gtDinhGia', 'AVG'],
+    MAX_VALUATION: ['gtDinhGia', 'MAX'],
+    MIN_VALUATION: ['gtDinhGia', 'MIN'],
+    AVG_DEBT: ['duNoTsbd', 'AVG'],
+    MAX_DEBT: ['duNoTsbd', 'MAX'],
+    MIN_DEBT: ['duNoTsbd', 'MIN'],
+    AVG_COLLATERAL_VALUE: ['gtBaoDam', 'AVG'],
+    TOTAL_COLLATERAL_VALUE: ['gtBaoDam', 'SUM'],
+    MAX_COLLATERAL_VALUE: ['gtBaoDam', 'MAX'],
+    MIN_COLLATERAL_VALUE: ['gtBaoDam', 'MIN'],
+    AVG_LTV: ['ltv', 'AVG'],
+    MAX_LTV: ['ltv', 'MAX'],
+    MIN_LTV: ['ltv', 'MIN'],
+  }
+
+  if (numericMetricConfig[metric]) {
+    const [field, mode] = numericMetricConfig[metric]
+    if (isGrouped) {
+      return data.map((group) => ({
+        key: group.key,
+        ...numericAggregate(group.items, field, mode),
+      }))
+    }
+    return numericAggregate(data, field, mode)
   }
 
   if (metric === 'TOTAL_VALUATION') {
@@ -382,6 +472,9 @@ export function executeQueryPlan(
 const isRange =
   timeContext.mode === 'RANGE'
 
+const isAllPeriods =
+  timeContext.mode === 'ALL_PERIODS'
+
 const period =
   timeContext.period
 
@@ -393,6 +486,7 @@ const toPeriod =
 
 if (
   !isRange &&
+  !isAllPeriods &&
   !period
 ) {
   return {
@@ -417,15 +511,29 @@ if (
   }
 }
 
-let data = isRange
-  ? getAssetsByReportingPeriod(
-      toPeriod,
-      dataset
-    )
-  : getAssetsByReportingPeriod(
-      period,
-      dataset
-    )
+let data
+
+if (isAllPeriods) {
+  // Newest period first so LIMIT naturally means the latest matching cases.
+  const periods = getReportingPeriods(dataset).slice().sort().reverse()
+
+  data = periods.flatMap((queryPeriod) =>
+    getAssetsByReportingPeriod(queryPeriod, dataset).map((item) => ({
+      ...item,
+      queryPeriod,
+    }))
+  )
+} else {
+  data = isRange
+    ? getAssetsByReportingPeriod(
+        toPeriod,
+        dataset
+      )
+    : getAssetsByReportingPeriod(
+        period,
+        dataset
+      )
+}
 
   // Số bản ghi ban đầu của kỳ báo cáo,
   // trước khi thực hiện bất kỳ bước nào.
@@ -590,10 +698,21 @@ matchedRecordCount =
       step.action === QUERY_PLAN_ACTIONS.LIMIT
     ) {
       if (Array.isArray(data)) {
-        data = data.slice(
-          0,
-          step.value
-        )
+        const limitValue = Math.max(0, Number(step.value) || 0)
+        const isRanking =
+          plan?.answerContext?.intent === 'RANK_DIMENSION' ||
+          plan?.answerContext?.intent === 'RANK'
+
+        // Ranking must not arbitrarily discard ties at the cutoff. If several
+        // provinces/types/units share the same maximum, return all co-leaders.
+        if (isRanking && limitValue > 0 && data.length > limitValue) {
+          const cutoff = Number(data[limitValue - 1]?.value)
+          data = data.filter((item, index) =>
+            index < limitValue || Number(item?.value) === cutoff
+          )
+        } else {
+          data = data.slice(0, limitValue)
+        }
       }
     }
   }
@@ -614,10 +733,15 @@ matchedRecordCount =
         fromPeriod,
         toPeriod,
       }
-    : {
-        mode: 'SINGLE_PERIOD',
-        period,
-      },
+    : isAllPeriods
+      ? {
+          mode: 'ALL_PERIODS',
+          period: null,
+        }
+      : {
+          mode: 'SINGLE_PERIOD',
+          period,
+        },
 
   data,
 

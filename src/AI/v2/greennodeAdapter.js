@@ -16,7 +16,21 @@
 */
 import {
   getAssetsByReportingPeriod,
-} from '../../services/assetService'
+  getReportingPeriods,
+} from '../../services/assetService.js'
+
+import {
+  getPersistentRiskSummary,
+} from '../../services/persistentRiskService.js'
+
+import {
+  createRiskIntentPlan,
+  isAnalyticalQuestion,
+} from './riskIntentPlanner.js'
+
+import {
+  buildRiskContext,
+} from './riskContextEngine.js'
 
 function normalizeQuestion(value) {
   return String(value || '')
@@ -262,17 +276,19 @@ function extractDynamicDimension(
   normalizedQuestion,
   dataset,
   period,
-  datasetKey
+  datasetKey,
+  assetsOverride = null
 ) {
   if (!period) {
     return null
   }
 
-  const assets =
-    getAssetsByReportingPeriod(
-      period,
-      dataset
-    )
+  const assets = Array.isArray(assetsOverride)
+    ? assetsOverride
+    : getAssetsByReportingPeriod(
+        period,
+        dataset
+      )
 
   const canonicalValues =
     Array.from(
@@ -319,17 +335,19 @@ function extractDynamicDimension(
 function extractDynamicRisk(
   normalizedQuestion,
   dataset,
-  period
+  period,
+  assetsOverride = null
 ) {
   if (!period) {
     return null
   }
 
-  const assets =
-    getAssetsByReportingPeriod(
-      period,
-      dataset
-    )
+  const assets = Array.isArray(assetsOverride)
+    ? assetsOverride
+    : getAssetsByReportingPeriod(
+        period,
+        dataset
+      )
 
   const canonicalValues =
     Array.from(
@@ -424,7 +442,11 @@ function detectMetric(
     ) ||
     normalizedQuestion.includes(
       'bao nhieu tsbd'
-    )
+    ) ||
+    normalizedQuestion.includes('tai san bao dam') ||
+    normalizedQuestion.includes('tai san dam bao') ||
+    normalizedQuestion.includes('so tai san bao dam') ||
+    normalizedQuestion.includes('bao nhieu tai san bao dam')
   ) {
     return 'TOTAL_COLLATERAL'
   }
@@ -537,19 +559,24 @@ function createBasePlan(
 
 function tryCreateFastQueryPlan(
   question,
-  dataset
+  dataset,
+  planningContext = {}
 ) {
   const normalizedQuestion =
     normalizeQuestion(question)
 
-  const period =
-  extractPeriod(
-    normalizedQuestion
-  )
+  if (isAnalyticalQuestion(normalizedQuestion)) {
+    return null
+  }
 
-if (!period) {
-  return null
-}
+  const period =
+    extractPeriod(normalizedQuestion) ||
+    planningContext?.defaultPeriod ||
+    null
+
+  if (!period) {
+    return null
+  }
 
   
 
@@ -613,11 +640,159 @@ if (asksCompare) {
   }
 }
 
+/*
+  ====================================================
+  RISK ASSET LIST
+  ====================================================
+
+  Ví dụ:
+  - Hà Nội phát sinh case tài sản nào sai?
+  - Có tài sản nào rủi ro tại Hà Nội?
+  - Case rủi ro nào phát sinh tại Hồ Chí Minh?
+
+  Ý nghĩa:
+  trả danh sách tài sản có risk,
+  không aggregate.
+*/
+
+const asksRiskAssetList =
+  (
+    normalizedQuestion.includes(
+      'tai san nao'
+    ) ||
+    normalizedQuestion.includes(
+      'case nao'
+    )
+  ) &&
+  (
+    normalizedQuestion.includes(
+      'rui ro'
+    ) ||
+    normalizedQuestion.includes(
+      'case tai san'
+    ) ||
+    normalizedQuestion.includes(
+      'case sai'
+    ) ||
+    normalizedQuestion.includes(
+      'tai san sai'
+    )
+  )
+
+if (asksRiskAssetList) {
+  const plan =
+    createBasePlan(period)
+
+  const province =
+    extractProvince(normalizedQuestion) ||
+    extractDynamicDimension(
+      normalizedQuestion,
+      dataset,
+      period,
+      'tinhTp',
+      planningContext?.periodAssets
+    )
+
+  if (province) {
+    plan.steps.push({
+      action: 'FILTER',
+      field: 'province',
+      operator: 'EQ',
+      value: province,
+    })
+  }
+
+  plan.steps.push({
+    action: 'FILTER',
+    field: 'valuationRisk',
+    operator: 'NOT_EMPTY',
+  })
+
+  return plan
+}
 
   const metric =
     detectMetric(
       normalizedQuestion
     )
+
+  /*
+  ====================================================
+  RISK DISTRIBUTION BY PROVINCE
+  ====================================================
+
+  Ví dụ:
+  - Tài sản rủi ro tập trung ở đâu?
+  - Tài sản định giá rủi ro tập trung ở tỉnh nào?
+  - Các tài sản có rủi ro phân bố ở thành phố nào?
+
+  Ý nghĩa:
+  chỉ lấy tài sản có ít nhất một risk,
+  sau đó đếm số tài sản theo tỉnh/thành phố.
+*/
+
+const asksRiskDistributionByProvince =
+  (
+    normalizedQuestion.includes(
+      'rui ro'
+    ) ||
+    normalizedQuestion.includes(
+      'case sai'
+    ) ||
+    normalizedQuestion.includes(
+      'tai san sai'
+    )
+  ) &&
+  (
+    normalizedQuestion.includes(
+      'tap trung'
+    ) ||
+    normalizedQuestion.includes(
+      'phan bo'
+    )
+  ) &&
+  (
+    normalizedQuestion.includes(
+      'o dau'
+    ) ||
+    normalizedQuestion.includes(
+      'tinh'
+    ) ||
+    normalizedQuestion.includes(
+      'thanh pho'
+    ) ||
+    normalizedQuestion.includes(
+      'dia ban'
+    )
+  )
+
+if (asksRiskDistributionByProvince) {
+  const plan =
+    createBasePlan(period)
+
+  plan.steps.push(
+    {
+      action: 'FILTER',
+      field: 'valuationRisk',
+      operator: 'NOT_EMPTY',
+    },
+    {
+      action: 'GROUP_BY',
+      field: 'province',
+    },
+    {
+      action: 'AGGREGATE',
+      metric: 'COUNT',
+    },
+    {
+      action: 'SORT',
+      by: 'value',
+      order: 'DESC',
+    }
+  )
+
+  return plan
+}
 
   
   if (!metric) {
@@ -625,8 +800,13 @@ if (asksCompare) {
   }
 
   const province =
-    extractProvince(
-      normalizedQuestion
+    extractProvince(normalizedQuestion) ||
+    extractDynamicDimension(
+      normalizedQuestion,
+      dataset,
+      period,
+      'tinhTp',
+      planningContext?.periodAssets
     )
 
   const assetGroup =
@@ -652,15 +832,17 @@ if (asksCompare) {
       normalizedQuestion,
       dataset,
       period,
-      'donViDinhGia'
+      'donViDinhGia',
+      planningContext?.periodAssets
     )
 
   const valuationRisk =
-  extractDynamicRisk(
-    normalizedQuestion,
-    dataset,
-    period
-  )
+    extractDynamicRisk(
+      normalizedQuestion,
+      dataset,
+      period,
+      planningContext?.periodAssets
+    ) || planningContext?.defaultRiskType || null
 
   const hasNoValuationRisk =
   normalizedQuestion.includes(
@@ -927,7 +1109,7 @@ async function createQueryPlanFromModel(
 ) {
   const response =
     await fetch(
-      'http://localhost:3001/api/ai/query-plan',
+      '/api/ai/query-plan',
       {
         method: 'POST',
 
@@ -973,12 +1155,114 @@ async function createQueryPlanFromModel(
 
 export async function createQueryPlanFromGreenNode(
   question,
-  dataset
+  dataset,
+  planningContext = {}
 ) {
+  const normalizedQuestion = normalizeQuestion(question)
+
+  // V2.6.7 Final: persistent-risk questions must use exactly the same
+  // deterministic source as the KPI. This prevents the UI from showing
+  // e.g. KPI = 0 while natural-language search returns all current risks.
+  // Persistent-risk intent is semantic rather than word-order dependent.
+  // Examples that must all route here:
+  // - "rủi ro 2 kỳ liên tiếp"
+  // - "phát sinh 2 kỳ rủi ro liên tiếp"
+  // - "rủi ro liên tục 2 tháng"
+  // - "rủi ro kéo dài"
+  const hasRiskTerm = /\brui ro\b/.test(normalizedQuestion)
+  const hasPersistenceTerm =
+    normalizedQuestion.includes('rui ro keo dai') ||
+    /\b(?:lien tiep|lien tuc)\b/.test(normalizedQuestion) ||
+    /\b(?:nhieu|qua nhieu)\s+ky\b/.test(normalizedQuestion)
+  const hasPeriodTerm = /\b(?:ky|thang)\b/.test(normalizedQuestion)
+  const asksPersistentRisk =
+    hasRiskTerm &&
+    (normalizedQuestion.includes('rui ro keo dai') || (hasPersistenceTerm && hasPeriodTerm))
+
+  if (asksPersistentRisk) {
+    const explicitPeriod = extractPeriod(normalizedQuestion)
+    const periods = getReportingPeriods(dataset)
+    const period = explicitPeriod || planningContext.defaultPeriod || periods.at(-1) || null
+    const asksThreePeriods =
+      /\b(?:3|ba)\s+(?:ky|thang)\b/.test(normalizedQuestion) ||
+      /\b(?:ky|thang)\s+(?:3|ba)\b/.test(normalizedQuestion)
+    const minConsecutive = asksThreePeriods ? 3 : 2
+    const summary = getPersistentRiskSummary({
+      period,
+      dataset,
+      minConsecutive,
+      // Same deterministic scope as the KPI shown on screen.
+      assetIds: Array.isArray(planningContext.persistentAssetIds)
+        ? planningContext.persistentAssetIds
+        : null,
+      riskType: planningContext.persistentRiskType || null,
+    })
+
+    const ids = summary.items.map((item) => item.maTsDg)
+    return {
+      version: '2.0',
+      timeContext: {
+        mode: 'SINGLE_PERIOD',
+        period,
+        fromPeriod: null,
+        toPeriod: null,
+      },
+      steps: [
+        {
+          action: 'FILTER',
+          field: 'maTsDg',
+          operator: 'IN',
+          value: ids,
+        },
+      ],
+      answerContext: {
+        domain: 'PERSISTENT_RISK',
+        intent: 'LIST',
+        minConsecutive,
+        persistentAssets: summary.persistentAssets,
+        threePlusAssets: summary.threePlusAssets,
+        available: summary.available,
+      },
+    }
+  }
+  const availablePeriods = getReportingPeriods(dataset)
+  const planningPeriod =
+    extractPeriod(normalizedQuestion) ||
+    planningContext.defaultPeriod ||
+    availablePeriods.at(-1) ||
+    null
+  const detectedProvince =
+    extractProvince(normalizedQuestion) ||
+    extractDynamicDimension(
+      normalizedQuestion,
+      dataset,
+      planningPeriod,
+      'tinhTp',
+      planningContext?.periodAssets
+    )
+  const detectedRiskType = extractDynamicRisk(
+    normalizedQuestion,
+    dataset,
+    planningPeriod,
+    planningContext?.periodAssets
+  )
+  const enrichedPlanningContext = {
+    ...planningContext,
+    detectedProvince,
+    detectedRiskType,
+  }
+
+  const riskPlan = createRiskIntentPlan(question, enrichedPlanningContext)
+
+  if (riskPlan) {
+    return riskPlan
+  }
+
   const fastPlan =
   tryCreateFastQueryPlan(
     question,
-    dataset
+    dataset,
+    enrichedPlanningContext
   )
 
   
@@ -993,6 +1277,24 @@ export async function createQueryPlanFromGreenNode(
     //)
 
     return fastPlan
+  }
+
+
+  /*
+    RISK CONTEXT PATH (V2.6.7)
+  */
+
+  if (isAnalyticalQuestion(normalizeQuestion(question))) {
+    const riskContext =
+      buildRiskContext(
+        question,
+        dataset,
+        enrichedPlanningContext
+      )
+
+    if (riskContext) {
+      return riskContext
+    }
   }
 
 

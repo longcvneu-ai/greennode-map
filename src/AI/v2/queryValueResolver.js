@@ -1,6 +1,6 @@
 import {
   getAssetsByReportingPeriod,
-} from '../../services/assetService'
+} from '../../services/assetService.js'
 
 /*
   ======================================================

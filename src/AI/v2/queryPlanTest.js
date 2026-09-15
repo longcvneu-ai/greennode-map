@@ -5,7 +5,7 @@ import {
   QUERY_PLAN_METRICS,
   QUERY_PLAN_GROUP_FIELDS,
   createEmptyQueryPlan,
-} from './queryPlanContract'
+} from './queryPlanContract.js'
 
 import {
   validateQueryPlan,
@@ -447,4 +447,35 @@ const invalidSequencePlan2 = {
 console.log(
   'QUERY PLAN V2 TEST 17 - INVALID SORT BEFORE AGGREGATE:',
   validateQueryPlan(invalidSequencePlan2)
+)
+
+const riskNotEmptyPlan = {
+  version: '2.0',
+
+  timeContext: {
+    mode: 'SINGLE_PERIOD',
+    period: '2026-08-31',
+    fromPeriod: null,
+    toPeriod: null,
+  },
+
+  steps: [
+    {
+      action: 'FILTER',
+      field: 'valuationRisk',
+      operator: 'NOT_EMPTY',
+    },
+    {
+      action: 'AGGREGATE',
+      metric: 'COUNT',
+    },
+  ],
+}
+
+const riskNotEmptyResult =
+  executeQueryPlan(riskNotEmptyPlan)
+
+console.log(
+  'TEST NOT_EMPTY RISK:',
+  riskNotEmptyResult
 )

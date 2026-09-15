@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useState, useMemo, useCallback } from 'react'
 import './App.css'
 import {
   getAssetsByReportingPeriod,
   getReportingPeriods,
-  getCollateralSnapshotByPeriodAndAsset,
+  MOCK_DATASET,
 } from './services/assetService'
 import {
   readExcelWorkbook,
@@ -14,6 +14,14 @@ import {
   buildCanonicalExcelData,
 } from './services/excelImportService'
 import AssetMap from './components/AssetMap'
+import { getPersistentRiskSummary } from './services/persistentRiskService'
+
+import {
+  buildComparisonAssets,
+  filterComparisonAssets,
+  sliceForTable,
+  TABLE_RENDER_LIMIT,
+} from './services/rangeComparisonService'
 
 import {
   createQueryPlanFromGreenNode,
@@ -35,7 +43,33 @@ import {
   resolveQueryPlanValues,
 } from './AI/v2/queryValueResolver'
 
+import {
+  formatRiskAnalysis,
+  fetchRiskEnrichment,
+  composeRiskAnswer,
+} from './AI/v2/riskAnalysisFormatter'
+
 import tsbdLogo from './assets/tsbd-logo.png'
+
+import headerMottoBg from './assets/header-motto-bg.png'
+
+function renderAiAnswer(answer) {
+  const text = String(answer || '')
+  const lines = text.split('\n')
+  const headings = new Set(['KẾT LUẬN', 'CĂN CỨ CHÍNH', 'XU HƯỚNG', 'ƯU TIÊN KIỂM TRA', 'AI BỔ SUNG'])
+  return (
+    <div className="ai-structured-answer">
+      {lines.map((line, index) => {
+        const trimmed = line.trim()
+        if (!trimmed) return <div key={index} className="ai-answer-gap" />
+        if (headings.has(trimmed)) return <div key={index} className="ai-answer-heading">{trimmed}</div>
+        if (/^P\d+:/.test(trimmed)) return <div key={index} className="ai-priority-line"><strong>{trimmed.match(/^P\d+:/)[0]}</strong>{trimmed.replace(/^P\d+:/, '')}</div>
+        if (trimmed.startsWith('•')) return <div key={index} className="ai-evidence-line">{trimmed}</div>
+        return <div key={index} className="ai-answer-line">{trimmed}</div>
+      })}
+    </div>
+  )
+}
 
 function App() {
     
@@ -50,7 +84,8 @@ const [fromPeriod, setFromPeriod] = useState('2026-06-30')
 const [toPeriod, setToPeriod] = useState('2026-08-31')
 const [changeType, setChangeType] = useState('Tất cả')
   const [selectedAssetId, setSelectedAssetId] = useState(null)
-
+const [searchText, setSearchText] =
+  useState('')
   const [filterOpen, setFilterOpen] =
   useState(false)
 
@@ -68,6 +103,10 @@ const [aiResult, setAiResult] =
 
 const [aiJobs, setAiJobs] =
   useState([])
+
+  const [aiTab, setAiTab] = useState('ASK')
+
+const [aiHistory, setAiHistory] = useState([])
 
   const [excelFileInfo, setExcelFileInfo] =
   useState(null)
@@ -106,34 +145,58 @@ const [excelImported, setExcelImported] =
 
 const [showValidationDetails, setShowValidationDetails] =
   useState(false)
+  const [showInputDetails, setShowInputDetails] = useState(false)
   const activeDataset =
-  importedExcelData || undefined
+  importedExcelData || MOCK_DATASET
 
-const reportingPeriods =
-  getReportingPeriods(
-    activeDataset
-  )
-  const periodAssets =
-  getAssetsByReportingPeriod(
-    reportingPeriod,
-    activeDataset
+const reportingPeriods = useMemo(
+  () => getReportingPeriods(activeDataset),
+  [activeDataset]
+)
+
+// V2.6.7 Final: gợi ý là "mỏ neo" dẫn người dùng từ tra cứu -> phân tích -> hành động.
+// Khai báo sau reportingPeriods để tránh ReferenceError khi React render lần đầu.
+const aiSuggestions = [
+  'Phân tích tình hình rủi ro tài sản hiện tại.',
+  'Địa bàn nào có nhiều tài sản rủi ro nhất?',
+  'Địa bàn Hà Nội có bao nhiêu tài sản bảo đảm?',
+  ...(reportingPeriods.length >= 2
+    ? ['So với kỳ trước, điểm rủi ro nào thay đổi đáng chú ý nhất?']
+    : []),
+  'Dựa trên dữ liệu hiện tại, tôi nên ưu tiên kiểm tra những gì?',
+]
+
+const periodAssets = useMemo(
+  () => getAssetsByReportingPeriod(reportingPeriod, activeDataset),
+  [reportingPeriod, activeDataset]
+)
+
+const fromPeriodAssets = useMemo(
+  () => getAssetsByReportingPeriod(fromPeriod, activeDataset),
+  [fromPeriod, activeDataset]
+)
+
+const toPeriodAssets = useMemo(
+  () => getAssetsByReportingPeriod(toPeriod, activeDataset),
+  [toPeriod, activeDataset]
+)
+
+const baseAssets = timeMode === 'Một kỳ' ? periodAssets : toPeriodAssets
+
+const filterOptions = useMemo(() => {
+  const uniqueSorted = (values) => [...new Set(values.filter(Boolean))].sort((a, b) =>
+    String(a).localeCompare(String(b), 'vi')
   )
 
-const fromPeriodAssets =
-  getAssetsByReportingPeriod(
-    fromPeriod,
-    activeDataset
-  )
-
-const toPeriodAssets =
-  getAssetsByReportingPeriod(
-    toPeriod,
-    activeDataset
-  )
-  const baseAssets =
-  timeMode === 'Một kỳ'
-    ? periodAssets
-    : toPeriodAssets
+  return {
+    assetGroups: uniqueSorted(baseAssets.map((asset) => asset.nhomTsCap1)),
+    provinces: uniqueSorted(baseAssets.map((asset) => asset.tinhTp)),
+    valuationUnits: uniqueSorted(baseAssets.map((asset) => asset.donViDinhGia)),
+    valuationRisks: uniqueSorted(
+      baseAssets.flatMap((asset) => (asset.risks ?? []).map((risk) => risk.loaiRuiRo))
+    ),
+  }
+}, [baseAssets])
 
 const matchesBaseFilters = (asset) => {
   const matchObjectType =
@@ -167,32 +230,102 @@ const matchesBaseFilters = (asset) => {
   )
 }
 
-const matchesRiskFilter = (asset) => {
-  if (valuationRisk === 'Tất cả') {
-    return true
-  }
-
-  if (valuationRisk === 'Không phát hiện') {
-    return asset.risks.length === 0
-  }
-
-  return asset.risks.some(
-    (risk) => risk.loaiRuiRo === valuationRisk
-  )
-}
-
 /*
   MỘT KỲ:
   áp dụng cả bộ lọc thông thường + bộ lọc rủi ro.
 */
-const filteredAssets =
-  timeMode === 'Một kỳ'
-    ? periodAssets.filter(
-        (asset) =>
-          matchesBaseFilters(asset) &&
-          matchesRiskFilter(asset)
+const normalizeSearchText = (value) =>
+  String(value ?? '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+
+const normalizedSearchText =
+  normalizeSearchText(searchText)
+
+const matchesSearch = (asset) => {
+  if (!normalizedSearchText) {
+    return true
+  }
+
+  const searchableValues = [
+    asset.maTsDg,
+    asset.maTsbd,
+    asset.cif,
+    asset.tinhTp,
+    asset.nhomTsCap1,
+    asset.loaiTsCap2,
+
+    // Các trường này dùng nếu dataset hiện có
+    asset.diaChi,
+    asset.tenKhachHang,
+    asset.donViDinhGia,
+    asset.valuationUnit,
+  ]
+
+  return searchableValues.some((value) =>
+    normalizeSearchText(value).includes(
+      normalizedSearchText
+    )
+  )
+}
+
+
+const filteredAssets = useMemo(() => {
+  const sourceAssets = timeMode === 'Một kỳ' ? periodAssets : toPeriodAssets
+
+  return sourceAssets.filter((asset) => {
+    const matchObjectType =
+      objectType === 'Tất cả' ||
+      (objectType === 'TSBĐ đang bảo đảm' && asset.isActiveCollateral) ||
+      (objectType === 'Không phải TSBĐ đang bảo đảm' && !asset.isActiveCollateral)
+
+    const matchAssetGroup = assetGroup === 'Tất cả' || asset.nhomTsCap1 === assetGroup
+    const matchProvince = province === 'Tất cả' || asset.tinhTp === province
+    const matchValuationUnit = valuationUnit === 'Tất cả' || asset.donViDinhGia === valuationUnit
+
+    let matchRisk = true
+    if (timeMode === 'Một kỳ') {
+      if (valuationRisk === 'Không phát hiện') {
+        matchRisk = (asset.risks ?? []).length === 0
+      } else if (valuationRisk !== 'Tất cả') {
+        matchRisk = (asset.risks ?? []).some((risk) => risk.loaiRuiRo === valuationRisk)
+      }
+    }
+
+    let matchText = true
+    if (normalizedSearchText) {
+      const searchableValues = [
+        asset.maTsDg,
+        asset.maTsbd,
+        asset.cif,
+        asset.tinhTp,
+        asset.nhomTsCap1,
+        asset.loaiTsCap2,
+        asset.diaChi,
+        asset.tenKhachHang,
+        asset.donViDinhGia,
+        asset.valuationUnit,
+      ]
+      matchText = searchableValues.some((value) =>
+        normalizeSearchText(value).includes(normalizedSearchText)
       )
-    : toPeriodAssets.filter(matchesBaseFilters)
+    }
+
+    return matchObjectType && matchAssetGroup && matchProvince && matchValuationUnit && matchRisk && matchText
+  })
+}, [
+  timeMode,
+  periodAssets,
+  toPeriodAssets,
+  objectType,
+  assetGroup,
+  province,
+  valuationUnit,
+  valuationRisk,
+  normalizedSearchText,
+])
 
 /*
   KHOẢNG THỜI GIAN:
@@ -204,9 +337,12 @@ const filteredAssets =
 */
 const filteredFromPeriodAssets =
   timeMode === 'Khoảng thời gian'
-    ? fromPeriodAssets.filter(matchesBaseFilters)
+    ? fromPeriodAssets.filter(
+        (asset) =>
+          matchesBaseFilters(asset) &&
+          matchesSearch(asset)
+      )
     : []
-
 /*
   Các kỳ nằm trong khoảng người dùng lựa chọn.
 */
@@ -225,20 +361,40 @@ const periodsInRange = reportingPeriods.filter(
   31/08 → danh sách tài sản
 */
 const assetsByPeriodInRange =
-  timeMode === 'Khoảng thời gian'
+  timeMode === 'Khoảng thời gian' && fromPeriod !== toPeriod
     ? periodsInRange.map((period) => ({
         period,
         assets:
   getAssetsByReportingPeriod(
-    period,
-    activeDataset
-  ).filter(
-    matchesBaseFilters
-  ),
+  period,
+  activeDataset
+).filter(
+  (asset) =>
+    matchesBaseFilters(asset) &&
+    matchesSearch(asset)
+),
       }))
     : []
 
+const tableAssets =
+  filteredAssets.slice(0, TABLE_RENDER_LIMIT)
+
 const totalAssets = filteredAssets.length
+
+const persistentRiskSummary = useMemo(() => {
+  const targetPeriod = timeMode === 'Một kỳ' ? reportingPeriod : toPeriod
+  return getPersistentRiskSummary({
+    period: targetPeriod,
+    dataset: activeDataset,
+    assetIds: filteredAssets.map((asset) => asset.maTsDg),
+    riskType: valuationRisk !== 'Tất cả' && valuationRisk !== 'Không phát hiện' ? valuationRisk : null,
+  })
+}, [timeMode, reportingPeriod, toPeriod, activeDataset, filteredAssets, valuationRisk])
+
+const persistentRiskById = useMemo(
+  () => new Map((persistentRiskSummary.items || []).map((item) => [item.maTsDg, item])),
+  [persistentRiskSummary]
+)
 
 const totalValuation = filteredAssets.reduce(
   (sum, asset) => sum + asset.gtDinhGia,
@@ -290,366 +446,20 @@ const collateralDebtDelta =
 
 const comparisonAssets =
   timeMode === 'Khoảng thời gian'
-    ? [
-        ...new Set([
-          ...filteredFromPeriodAssets.map(
-            (asset) => asset.maTsDg
-          ),
-          ...filteredAssets.map(
-            (asset) => asset.maTsDg
-          ),
-        ]),
-      ].map((maTsDg) => {
-        const fromAsset =
-          filteredFromPeriodAssets.find(
-            (asset) => asset.maTsDg === maTsDg
-          )
-
-        const toAsset =
-          filteredAssets.find(
-            (asset) => asset.maTsDg === maTsDg
-          )
-          const fromCollateralSnapshot =
-  getCollateralSnapshotByPeriodAndAsset(
-    maTsDg,
-    fromPeriod,
-    activeDataset
-  )
-
-const toCollateralSnapshot =
-  getCollateralSnapshotByPeriodAndAsset(
-    maTsDg,
-    toPeriod,
-    activeDataset
-  )
-
-        const fromValuation =
-          fromAsset?.gtDinhGia ?? 0
-
-        const toValuation =
-          toAsset?.gtDinhGia ?? 0
-
-        const valuationChange =
-          toValuation - fromValuation
-
-        const fromDebt =
-  fromCollateralSnapshot?.duNoTsbd ??
-  fromAsset?.duNoTsbd ??
-  0
-
-const toDebt =
-  toCollateralSnapshot?.duNoTsbd ??
-  toAsset?.duNoTsbd ??
-  0
-
-        const debtChange =
-          toDebt - fromDebt
-
-        /*
-          ===== RỦI RO ĐẦU KỲ =====
-        */
-        const fromRiskTypes = new Set(
-          (fromAsset?.risks ?? []).map(
-            (risk) => risk.loaiRuiRo
-          )
-        )
-
-        /*
-          ===== RỦI RO CUỐI KỲ =====
-        */
-        const toRiskTypes = new Set(
-          (toAsset?.risks ?? []).map(
-            (risk) => risk.loaiRuiRo
-          )
-        )
-
-        /*
-          Những loại rủi ro có ở cuối kỳ
-          nhưng đầu kỳ chưa có.
-        */
-        const newRiskTypesAtEnd = [
-          ...toRiskTypes,
-        ].filter(
-          (riskType) =>
-            !fromRiskTypes.has(riskType)
-        )
-
-        /*
-          ===== RỦI RO PHÁT SINH TRONG KHOẢNG =====
-
-          So sánh từng kỳ với kỳ ngay trước nó.
-
-          Ví dụ:
-          30/06: []
-          31/07: [Định giá cao]
-          31/08: []
-
-          => Định giá cao được ghi nhận là
-             rủi ro phát sinh trong khoảng.
-        */
-        const riskTypesOccurredInRange =
-          new Set()
-
-        for (
-          let index = 1;
-          index < assetsByPeriodInRange.length;
-          index += 1
-        ) {
-          const previousPeriod =
-            assetsByPeriodInRange[index - 1]
-
-          const currentPeriod =
-            assetsByPeriodInRange[index]
-
-          const previousAsset =
-            previousPeriod.assets.find(
-              (asset) =>
-                asset.maTsDg === maTsDg
-            )
-
-          const currentAsset =
-            currentPeriod.assets.find(
-              (asset) =>
-                asset.maTsDg === maTsDg
-            )
-
-          const previousRiskTypes = new Set(
-            (previousAsset?.risks ?? []).map(
-              (risk) => risk.loaiRuiRo
-            )
-          )
-
-          const currentRiskTypes =
-            (currentAsset?.risks ?? []).map(
-              (risk) => risk.loaiRuiRo
-            )
-
-          currentRiskTypes.forEach(
-            (riskType) => {
-              if (
-                !previousRiskTypes.has(riskType)
-              ) {
-                riskTypesOccurredInRange.add(
-                  riskType
-                )
-              }
-            }
-          )
-        }
-
-        let changeStatus =
-  'Không thay đổi'
-
-const fromCollateralActive =
-  fromCollateralSnapshot?.trangThaiTsbd ===
-  'Đang bảo đảm'
-
-const toCollateralActive =
-  toCollateralSnapshot?.trangThaiTsbd ===
-  'Đang bảo đảm'
-
-const toCollateralReleased =
-  toCollateralSnapshot?.trangThaiTsbd ===
-    'Đã giải chấp' &&
-  Boolean(
-    toCollateralSnapshot?.ngayGiaiChap
-  )
-
-if (
-  fromCollateralActive &&
-  toCollateralReleased
-) {
-  changeStatus =
-    'Đã giải chấp'
-} else if (
-  fromCollateralActive &&
-  !toCollateralSnapshot
-) {
-  changeStatus =
-    'Không còn xuất hiện trong nguồn'
-} else if (
-  !fromCollateralSnapshot &&
-  toCollateralActive
-) {
-  changeStatus =
-    'Phát sinh TSBĐ'
-} else if (
-  !fromAsset &&
-  toAsset &&
-  !fromCollateralSnapshot
-) {
-  changeStatus =
-    'Phát sinh mới'
-} else if (
-  fromAsset &&
-  !toAsset &&
-  !toCollateralSnapshot
-) {
-  changeStatus =
-    'Không còn cuối kỳ'
-} else if (valuationChange > 0) {
-          changeStatus =
-            'Tăng GT định giá'
-        } else if (valuationChange < 0) {
-          changeStatus =
-            'Giảm GT định giá'
-        }
-
-        return {
-          maTsDg,
-          fromAsset,
-          toAsset,
-          fromCollateralSnapshot,
-          toCollateralSnapshot,
-
-          fromValuation,
-          toValuation,
-          valuationChange,
-
-          fromDebt,
-          toDebt,
-          debtChange,
-
-          newRiskTypesAtEnd,
-
-          riskTypesOccurredInRange: [
-            ...riskTypesOccurredInRange,
-          ],
-
-          changeStatus,
-        }
+    ? buildComparisonAssets({
+        fromAssets: filteredFromPeriodAssets,
+        toAssets: filteredAssets,
+        assetsByPeriodInRange,
+        fromPeriod,
+        toPeriod,
+        dataset: activeDataset,
       })
     : []
 
 const filteredComparisonAssets =
-  comparisonAssets.filter((item) => {
-    /*
-      1. Xử lý các biến động RỦI RO trước.
-    */
-
-    if (
-      changeType ===
-      'Phát sinh rủi ro mới'
-    ) {
-      if (valuationRisk === 'Tất cả') {
-        return (
-          item.newRiskTypesAtEnd.length > 0
-        )
-      }
-
-      if (
-        valuationRisk ===
-        'Không phát hiện'
-      ) {
-        return false
-      }
-
-      return item.newRiskTypesAtEnd.includes(
-        valuationRisk
-      )
-    }
-
-    if (
-      changeType ===
-      'Phát sinh rủi ro trong khoảng'
-    ) {
-      if (valuationRisk === 'Tất cả') {
-        return (
-          item.riskTypesOccurredInRange
-            .length > 0
-        )
-      }
-
-      if (
-        valuationRisk ===
-        'Không phát hiện'
-      ) {
-        return false
-      }
-
-      return (
-        item.riskTypesOccurredInRange.includes(
-          valuationRisk
-        )
-      )
-    }
-
-    /*
-      2. Với các loại biến động thông thường,
-         bộ lọc "Rủi ro định giá"
-         được hiểu là trạng thái RỦI RO CUỐI KỲ.
-    */
-
-    if (
-      valuationRisk !== 'Tất cả'
-    ) {
-      if (!item.toAsset) {
-        return false
-      }
-
-      if (
-        !matchesRiskFilter(item.toAsset)
-      ) {
-        return false
-      }
-    }
-
-    /*
-      3. Sau đó mới xử lý loại biến động tài sản.
-    */
-
-    if (changeType === 'Tất cả') {
-      return true
-    }
-
-    if (
-      changeType === 'Phát sinh mới'
-    ) {
-      return (
-        item.changeStatus ===
-        'Phát sinh mới'
-      )
-    }
-
-    if (
-      changeType === 'Tăng GT định giá'
-    ) {
-      return item.valuationChange > 0
-    }
-
-    if (
-      changeType === 'Giảm GT định giá'
-    ) {
-      return item.valuationChange < 0
-    }
-
-    if (changeType === 'Dư nợ tăng') {
-      return item.debtChange > 0
-    }
-
-    if (changeType === 'Dư nợ giảm') {
-      return item.debtChange < 0
-    }
-
-    if (changeType === 'Giải chấp') {
-  return (
-    item.fromAsset?.isActiveCollateral &&
-    item.toAsset?.trangThaiTsbd ===
-      'Đã giải chấp'
-  )
-}
-
-if (
-  changeType ===
-  'Không còn xuất hiện trong nguồn'
-) {
-  return (
-    item.changeStatus ===
-    'Không còn xuất hiện trong nguồn'
-  )
-}
-
-return true
+  filterComparisonAssets(comparisonAssets, {
+    changeType,
+    valuationRisk,
   })
           const mapAssets =
   timeMode === 'Một kỳ'
@@ -714,8 +524,21 @@ const comparisonToTotalDebt =
     0
   )
 
-  const formatBillion = (value) =>
-    `${(value / 1_000_000_000).toFixed(1)} tỷ`
+  const formatBillion = (value) => {
+  const billionValue =
+    value / 1_000_000_000
+
+  const formattedValue =
+    billionValue.toLocaleString(
+      'en-US',
+      {
+        minimumFractionDigits: 1,
+        maximumFractionDigits: 1,
+      }
+    )
+
+  return `${formattedValue} tỷ đồng`
+}
 
   const handleSelectAssetFromTable = (maTsDg) => {
   setSelectedAssetId(maTsDg)
@@ -745,7 +568,9 @@ function splitQuestions(input) {
 
   const rawParts =
     text
-      .split(/\n+|\?+/)
+      // One line = one question. A '?' inside a line may connect clauses
+      // belonging to the same request, e.g. '... tỉnh nào? thời điểm nào'.
+      .split(/\n+/)
       .map((item) =>
         item.trim()
       )
@@ -769,14 +594,22 @@ function splitQuestions(input) {
 }
 
 const handleAskAI = async () => {
+
   const question = aiQuestion.trim()
 
   if (!question) {
+
     setAiError('Vui lòng nhập câu hỏi.')
+
     setAiResult(null)
+
     setAiJobs([])
+
     return
+
   }
+
+  setAiQuestion('')
 
   const questions = splitQuestions(question)
 
@@ -829,11 +662,126 @@ const handleAskAI = async () => {
         const rawQueryPlan =
   await createQueryPlanFromGreenNode(
     job.question,
-    activeDataset
+    activeDataset,
+    {
+      defaultPeriod: timeMode === 'Một kỳ' ? reportingPeriod : toPeriod,
+      // Reuse the already-projected period assets so AI planning does not
+      // rebuild 30k records just to resolve province/risk dimensions.
+      periodAssets: timeMode === 'Một kỳ' ? periodAssets : toPeriodAssets,
+      defaultRiskType:
+        valuationRisk !== 'Tất cả' && valuationRisk !== 'Không phát hiện'
+          ? valuationRisk
+          : null,
+      // Keep persistent-risk natural-language answers on the exact same
+      // current UI scope as the KPI (period + filters + search).
+      persistentAssetIds: filteredAssets.map((asset) => asset.maTsDg),
+      persistentRiskType:
+        valuationRisk !== 'Tất cả' && valuationRisk !== 'Không phát hiện'
+          ? valuationRisk
+          : null,
+    }
   )
-  
 
-const resolution =
+  if (rawQueryPlan?.engine === 'RISK_CONTEXT') {
+    const analysis =
+      formatRiskAnalysis(
+        rawQueryPlan
+      )
+
+    const answer =
+      analysis.text
+
+    const jobEndTime =
+      performance.now()
+
+    const successJob = {
+      ...job,
+      status: 'SUCCESS',
+      planner: 'RISK_CONTEXT',
+      queryPlan: rawQueryPlan,
+      result: null,
+      answer,
+      error: null,
+      durationMs: Math.round(
+        jobEndTime - jobStartTime
+      ),
+    }
+
+    completedJobs.push(successJob)
+
+    setAiHistory((current) => [
+      {
+        id: successJob.id,
+        question: successJob.question,
+        answer: successJob.answer,
+      },
+      ...current,
+    ])
+
+    setAiJobs((currentJobs) =>
+      currentJobs.map((item) =>
+        item.id === job.id
+          ? successJob
+          : item
+      )
+    )
+
+    if (analysis.canEnrich && analysis.riskContext) {
+      fetchRiskEnrichment(
+        job.question,
+        analysis.riskContext
+      ).then((enrichment) => {
+        const enrichedAnswer =
+          composeRiskAnswer(
+            analysis,
+            enrichment
+          )
+
+        const enrichedJob = {
+          ...successJob,
+          answer: enrichedAnswer,
+          durationMs: Math.round(
+            performance.now() - jobStartTime
+          ),
+        }
+
+        const existingIndex =
+          completedJobs.findIndex((item) =>
+            item.id === job.id
+          )
+
+        if (existingIndex >= 0) {
+          completedJobs[existingIndex] = enrichedJob
+        } else {
+          completedJobs.push(enrichedJob)
+        }
+
+        setAiHistory((current) => [
+          {
+            id: job.id,
+            question: job.question,
+            answer: enrichedAnswer,
+          },
+          ...current.filter((item) =>
+            item.id !== job.id
+          ),
+        ])
+
+        setAiJobs((currentJobs) =>
+          currentJobs.map((item) =>
+            item.id === job.id
+              ? enrichedJob
+              : item
+          )
+        )
+      })
+    }
+
+    continue
+  }
+
+
+  const resolution =
   resolveQueryPlanValues(
     rawQueryPlan,
     activeDataset
@@ -841,10 +789,19 @@ const resolution =
   
 
 if (!resolution.success) {
-  const errorMessage =
+  const technicalError =
     resolution.errors.join(
       ' | '
     )
+
+  console.error(
+    'Query plan resolution failed:',
+    job.question,
+    technicalError
+  )
+
+  const errorMessage =
+    'Chưa đủ thông tin để trả lời. Bạn có thể diễn đạt lại câu hỏi (kèm kỳ báo cáo và loại tài sản) rồi thử lại.'
 
   const failedJob = {
     ...job,
@@ -882,10 +839,19 @@ const validation =
   )
 
         if (!validation.valid) {
-          const errorMessage =
-            `Query Plan không hợp lệ: ${validation.errors.join(
+          const technicalErrors =
+            validation.errors.join(
               ' | '
-            )}`
+            )
+
+          console.error(
+            'Query plan validation failed:',
+            job.question,
+            technicalErrors
+          )
+
+          const errorMessage =
+            'Câu hỏi chưa thể thực hiện ở dạng hiện tại. Vui lòng diễn đạt lại câu hỏi và thử lại.'
 
           const failedJob = {
             ...job,
@@ -914,9 +880,18 @@ const validation =
           )
 
         if (!result.success) {
-          const errorMessage =
+          const technicalErrors =
             result.errors?.join(' | ') ||
-            'Không thể thực thi Query Plan.'
+            'no detail'
+
+          console.error(
+            'Query plan execution failed:',
+            job.question,
+            technicalErrors
+          )
+
+          const errorMessage =
+            'Không thể xử lý truy vấn dữ liệu lúc này. Vui lòng thử lại.'
 
           const failedJob = {
             ...job,
@@ -961,6 +936,15 @@ const validation =
         }
 
         completedJobs.push(successJob)
+
+        setAiHistory((current) => [
+  {
+    id: successJob.id,
+    question: successJob.question,
+    answer: successJob.answer,
+  },
+  ...current,
+])
 
         setAiJobs((currentJobs) =>
           currentJobs.map((item) =>
@@ -1094,10 +1078,7 @@ const canonicalData =
   buildCanonicalExcelData(
     extractedData
   )
-  console.log(
-  'GREENNODE CANONICAL TEST:',
-  canonicalData
-)
+  
     setExcelFileInfo({
       fileName: result.fileName,
       sheetNames: result.sheetNames,
@@ -1159,11 +1140,14 @@ setImportedExcelFileInfo(
 )
 
 setExcelImported(true)
+// A selection/popup from the previous dataset must never drive the new map.
+setSelectedAssetId(null)
 setShowValidationDetails(false)
 }
 
 const handleClearImportedExcel = () => {
   setExcelImported(false)
+  setSelectedAssetId(null)
   setImportedExcelFileInfo(null)
   setCanonicalExcelData(null)
   setImportedExcelData(null)
@@ -1197,7 +1181,7 @@ const totalExcelWarnings =
 const excelReadyToImport =
   Boolean(excelFileInfo) &&
   totalExcelErrors === 0
-const handleViewAssetDetail = (asset) => {
+const handleViewAssetDetail = useCallback((asset) => {
     setSelectedAssetId(asset.maTsDg)
 
     setTimeout(() => {
@@ -1212,7 +1196,7 @@ const handleViewAssetDetail = (asset) => {
         })
       }
     }, 100)
-  }
+  }, [])
 
   return (
     <div className="app">
@@ -1236,31 +1220,54 @@ const handleViewAssetDetail = (asset) => {
       </div>
 
       <h1>
-        Hệ sinh thái bản đồ số TSBĐ
+        HỆ SINH THÁI BẢN ĐỒ SỐ TSBĐ
       </h1>
+
+      <div className="gn-brand-slogan">
+        Kết nối dữ liệu – Nhận diện rủi ro – Hỗ trợ ra quyết định
+      </div>
     </div>
   </div>
 
   <div className="gn-header-right">
-    <div className="gn-source-badge">
-      <span className="gn-source-dot" />
+    <img
+  src={headerMottoBg}
+  alt=""
+  className="gn-header-right-art"
+/>
+  <div className="gn-source-badge">
+    <span className="gn-source-dot" />
 
-      Dữ liệu:
-      <strong>
-        {excelImported ? 'EXCEL' : 'MOCK'}
-      </strong>
+    <span>Dữ liệu:</span>
+
+    <strong>
+      {excelImported ? 'EXCEL' : 'MOCK'}
+    </strong>
+  </div>
+
+  <div className="gn-notification">
+  <span>🔔</span>
+  <span className="gn-notification-dot" />
+</div>
+
+<div className="gn-user">
+  <div className="gn-user-avatar">
+    TL
+  </div>
+
+  <div className="gn-user-info">
+    <div className="gn-user-name">
+      Người dùng
     </div>
 
-    <div className="gn-user">
-      <div className="gn-user-avatar">
-        TL
-      </div>
-
-      <div className="gn-user-name">
-        Người dùng
-      </div>
+    <div className="gn-user-role">
+      GreenNode Map
     </div>
   </div>
+</div>
+
+  
+</div>
 </header>
 
       <section
@@ -1392,7 +1399,7 @@ const handleViewAssetDetail = (asset) => {
     }
   >
     <option>Tất cả</option>
-    <option>Phát sinh mới</option>
+    <option value="Phát sinh mới">Tài sản phát sinh mới</option>
     <option>Tăng GT định giá</option>
     <option>Giảm GT định giá</option>
     <option>Dư nợ tăng</option>
@@ -1429,8 +1436,9 @@ const handleViewAssetDetail = (asset) => {
               }
             >
               <option>Tất cả</option>
-              <option>BĐS</option>
-              <option>Động sản</option>
+              {filterOptions.assetGroups.map((value) => (
+                <option key={value} value={value}>{value}</option>
+              ))}
             </select>
           </label>
 
@@ -1443,8 +1451,9 @@ const handleViewAssetDetail = (asset) => {
               }
             >
               <option>Tất cả</option>
-              <option>Hà Nội</option>
-              <option>TP. Hồ Chí Minh</option>
+              {filterOptions.provinces.map((value) => (
+                <option key={value} value={value}>{value}</option>
+              ))}
             </select>
           </label>
           <label>
@@ -1456,9 +1465,9 @@ const handleViewAssetDetail = (asset) => {
              }
             >
     <option>Tất cả</option>
-    <option>Nội bộ</option>
-    <option>Công ty định giá A</option>
-    <option>Công ty định giá B</option>
+    {filterOptions.valuationUnits.map((value) => (
+      <option key={value} value={value}>{value}</option>
+    ))}
   </select>
 </label>
 
@@ -1472,9 +1481,9 @@ const handleViewAssetDetail = (asset) => {
             >
               <option>Tất cả</option>
               <option>Không phát hiện</option>
-              <option>Định giá cao</option>
-              <option>Sai phương pháp</option>
-              <option>Sai thông tin tài sản</option>
+              {filterOptions.valuationRisks.map((value) => (
+                <option key={value} value={value}>{value}</option>
+              ))}
             </select>
           </label>
           </aside>
@@ -1500,6 +1509,7 @@ const handleViewAssetDetail = (asset) => {
           ? changeType
           : 'Tất cả'
       }
+      valuationRisk={valuationRisk}
     />
   </section>
 
@@ -1642,7 +1652,23 @@ const handleViewAssetDetail = (asset) => {
 
 
   {/* =========================
-      KPI 4 - DƯ NỢ TSBĐ
+      KPI 4 - RỦI RO KÉO DÀI
+      ========================= */}
+  <div className={`kpi-card kpi-card-risk-persistent ${persistentRiskSummary.persistentAssets > 0 ? 'has-alert' : 'is-clear'}`}>
+    <span>Tài sản rủi ro kéo dài</span>
+    <strong>{persistentRiskSummary.persistentAssets}</strong>
+    <small>
+      {!persistentRiskSummary.available
+        ? 'Cần tối thiểu 2 kỳ dữ liệu'
+        : persistentRiskSummary.persistentAssets === 0
+          ? 'Không có TS rủi ro ≥ 2 kỳ liên tiếp'
+          : `⚠ Rủi ro ≥ 2 kỳ liên tiếp${persistentRiskSummary.threePlusAssets > 0 ? ` • ${persistentRiskSummary.threePlusAssets} TS ≥ 3 kỳ` : ''}`}
+    </small>
+  </div>
+
+
+  {/* =========================
+      KPI 5 - DƯ NỢ TSBĐ
       ========================= */}
   <div className="kpi-card">
     <span>Dư nợ TSBĐ</span>
@@ -1697,62 +1723,80 @@ const handleViewAssetDetail = (asset) => {
 
 <aside className="ai-panel">
 
-  <h2>Dữ liệu đầu vào</h2>
+ <div className="data-input-summary">
+  <div className="data-input-title-row">
+    <h2>Dữ liệu đầu vào</h2>
 
-  <div
-    style={{
-      marginBottom: '10px',
-      fontSize: '12px',
-      fontWeight: '700',
-    }}
-  >
-    <div>
-  Nguồn đang hoạt động:{' '}
-  {excelImported ? 'EXCEL' : 'MOCK'}
-</div>
-
-{excelImported &&
-  importedExcelFileInfo && (
-    <div
-      style={{
-        marginTop: '4px',
-        fontWeight: '400',
-        wordBreak: 'break-word',
-      }}
+    <span
+      className={`data-input-source ${
+        excelImported
+          ? 'is-excel'
+          : 'is-mock'
+      }`}
     >
-      {importedExcelFileInfo.fileName}
-    </div>
-  )}
+      <span className="data-input-source-dot" />
+
+      {excelImported
+        ? 'EXCEL'
+        : 'MOCK'}
+    </span>
   </div>
 
-  <label
-    htmlFor="excel-file-input"
-    style={{
-      display: 'block',
-      padding: '10px 14px',
-      marginBottom: '10px',
-      background: '#ffffff',
-      border: '1px solid #cbd5e1',
-      borderRadius: '8px',
-      cursor: 'pointer',
-      textAlign: 'center',
-      fontWeight: '600',
-    }}
-  >
-    📂 Chọn file Excel
+  {excelImported ? (
+    <>
+      <div className="data-input-success">
+        ✓ Đã nhập dữ liệu Excel
+      </div>
 
-    <input
-      id="excel-file-input"
-      type="file"
-      accept=".xlsx,.xls"
-      onChange={handleExcelFileChange}
-      style={{
-        display: 'none',
-      }}
-    />
-    </label>
+      {importedExcelFileInfo && (
+        <div className="data-input-file-name">
+          {importedExcelFileInfo.fileName}
+        </div>
+      )}
 
-  {excelFileInfo && (
+      <button
+        type="button"
+        className="data-input-detail-button"
+        onClick={() =>
+          setShowInputDetails(
+            (current) => !current
+          )
+        }
+      >
+        {showInputDetails
+          ? 'Ẩn chi tiết'
+          : 'Xem chi tiết'}
+      </button>
+    </>
+  ) : (
+    <>
+      <div className="data-input-mock-status">
+        Dữ liệu mẫu đang hoạt động
+      </div>
+
+      <label
+        htmlFor="excel-file-input"
+        className="data-input-file-button"
+      >
+        📂 Chọn file Excel
+
+        <input
+          id="excel-file-input"
+          type="file"
+          accept=".xlsx,.xls"
+          onChange={handleExcelFileChange}
+          style={{
+            display: 'none',
+          }}
+        />
+      </label>
+    </>
+  )}
+</div>
+
+  {excelFileInfo &&
+  (!excelImported ||
+    showInputDetails) && (
     <div
       style={{
         padding: '10px',
@@ -2027,33 +2071,186 @@ const handleViewAssetDetail = (asset) => {
 
   <hr />
 
-  <h2>Trợ lý AI</h2>
+ <div className="ai-panel-v2">
+  <div className="ai-panel-header">
+    <div>
+      <div className="ai-panel-title">
+        <span className="ai-panel-icon">
+          ✦
+        </span>
 
-<p className="ai-description">
-  Hỏi dữ liệu Tài sản / TSBĐ bằng ngôn ngữ tự nhiên.
-</p>
+        <h2>Trợ lý AI</h2>
+      </div>
 
-<textarea
-  placeholder="Ví dụ: Top 1 tỉnh có dư nợ TSBĐ cao nhất tháng 8/2026"
-  value={aiQuestion}
-  onChange={(event) =>
-    setAiQuestion(event.target.value)
-  }
-  disabled={aiLoading}
-/>
+      <p className="ai-description">
+        Phân tích dữ liệu Tài sản / TSBĐ bằng ngôn ngữ tự nhiên.
+      </p>
+    </div>
 
-<button
+    <span className="ai-ready-status">
+      <span className="ai-ready-dot" />
+      Sẵn sàng
+    </span>
+  </div>
+
+  <div className="ai-tabs">
+    <button
+      type="button"
+      className={
+        aiTab === 'ASK'
+          ? 'ai-tab active'
+          : 'ai-tab'
+      }
+      onClick={() =>
+        setAiTab('ASK')
+      }
+    >
+      Hỏi AI
+    </button>
+
+    <button
+      type="button"
+      className={
+        aiTab === 'SUGGESTIONS'
+          ? 'ai-tab active'
+          : 'ai-tab'
+      }
+      onClick={() =>
+        setAiTab('SUGGESTIONS')
+      }
+    >
+      Gợi ý phân tích
+    </button>
+
+    <button
+      type="button"
+      className={
+        aiTab === 'HISTORY'
+          ? 'ai-tab active'
+          : 'ai-tab'
+      }
+      onClick={() =>
+        setAiTab('HISTORY')
+      }
+    >
+      Lịch sử
+    </button>
+  </div>
+
+  {aiTab === 'ASK' && (
+    <div className="ai-ask-tab">
+      <div className="ai-question-row">
+        <div className="ai-textarea-wrapper">
+  <textarea
+    placeholder="Nhập câu hỏi về tài sản, TSBĐ, dư nợ..."
+    value={aiQuestion}
+    onChange={(event) =>
+      setAiQuestion(
+        event.target.value
+      )
+    }
+    disabled={aiLoading}
+  />
+
+  {aiQuestion && !aiLoading && (
+    <button
+      type="button"
+      className="ai-clear-button"
+      onClick={() => setAiQuestion('')}
+      aria-label="Xóa câu hỏi"
+      title="Xóa câu hỏi"
+    >
+      ×
+    </button>
+  )}
+</div>
+        <button
   type="button"
+  className="ai-send-button"
   onClick={handleAskAI}
   disabled={
     aiLoading ||
     !aiQuestion.trim()
   }
+  aria-label="Hỏi AI"
 >
-  {aiLoading
-    ? 'Đang xử lý...'
-    : 'Hỏi AI'}
+  {aiLoading ? (
+  '...'
+) : (
+  <svg
+    width="20"
+    height="20"
+    viewBox="0 0 24 24"
+    fill="none"
+    aria-hidden="true"
+  >
+    <path
+      d="M22 2L11 13"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path
+      d="M22 2L15 22L11 13L2 9L22 2Z"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+)}
 </button>
+      </div>
+    </div>
+  )}
+
+  {aiTab === 'SUGGESTIONS' && (
+  <div className="ai-suggestion-list">
+    {aiSuggestions.map((suggestion) => (
+      <button
+        key={suggestion}
+        type="button"
+        className="ai-suggestion-item"
+        onClick={() => {
+          setAiQuestion(suggestion)
+          setAiTab('ASK')
+        }}
+      >
+        {suggestion}
+      </button>
+    ))}
+  </div>
+)}
+
+  {aiTab === 'HISTORY' && (
+  <div className="ai-history-list">
+    {aiHistory.length === 0 ? (
+      <div className="ai-tab-placeholder">
+        Chưa có lịch sử câu hỏi trong phiên này.
+      </div>
+    ) : (
+      aiHistory.map((item) => (
+        <button
+          key={item.id}
+          type="button"
+          className="ai-history-item"
+          onClick={() => {
+            setAiQuestion(item.question)
+            setAiTab('ASK')
+          }}
+        >
+          <strong>{item.question}</strong>
+
+          <span>
+            {item.answer}
+          </span>
+        </button>
+      ))
+    )}
+  </div>
+)}
+</div>
 
 {aiError && (
   <div
@@ -2104,6 +2301,9 @@ const handleViewAssetDetail = (asset) => {
           (step) =>
             step.action === 'LOOKUP'
         )
+
+      const answerIntent =
+        job.queryPlan?.answerContext?.intent
 
       const compareStep =
         steps.find(
@@ -2181,7 +2381,7 @@ const handleViewAssetDetail = (asset) => {
             'SUCCESS' && (
             <>
               <div className="ai-answer-summary">
-                {job.answer}
+                {renderAiAnswer(job.answer)}
               </div>
 
               {/*
@@ -2207,6 +2407,15 @@ const handleViewAssetDetail = (asset) => {
                               : groupStep.field ===
                                 'valuationUnit'
                               ? 'Đơn vị định giá'
+                              : groupStep.field ===
+                                'assetType'
+                              ? 'Loại tài sản'
+                              : groupStep.field ===
+                                'valuationRisk'
+                              ? 'Loại rủi ro'
+                              : groupStep.field ===
+                                'queryPeriod'
+                              ? 'Kỳ báo cáo'
                               : 'Nhóm'}
                           </th>
 
@@ -2239,9 +2448,9 @@ const handleViewAssetDetail = (asset) => {
                             >
                               <td>
                                 <strong>
-                                  {
-                                    item.key
-                                  }
+                                  {groupStep.field === 'queryPeriod'
+                                    ? item.key
+                                    : item.key}
                                 </strong>
                               </td>
 
@@ -2564,6 +2773,81 @@ const handleViewAssetDetail = (asset) => {
                   </div>
                 )}
 
+              {/*
+                ==========================
+                LIST - KẾT QUẢ LIỆT KÊ
+                ==========================
+                Luôn trình bày dạng bảng để người dùng có thể đọc/đối chiếu
+                thay vì một đoạn văn dài. Chỉ render 100 dòng đầu để giữ UI mượt.
+              */}
+              {answerIntent === 'LIST' &&
+                Array.isArray(data) &&
+                data.length > 0 &&
+                !groupStep &&
+                !lookupStep && (
+                  <div className="ai-table-wrapper">
+                    <div className="ai-list-table-note">
+                      {data.length > 100
+                        ? `Có ${data.length} kết quả · hiển thị 100 dòng đầu`
+                        : `${data.length} kết quả`}
+                    </div>
+                    <table className="ai-result-table">
+                      <thead>
+                        <tr>
+                          <th>Mã TS</th>
+                          <th>Tên tài sản</th>
+                          <th>Loại TS</th>
+                          <th>Tỉnh/TP</th>
+                          <th>GT định giá</th>
+                          <th>Mã TSBĐ</th>
+                          <th>Dư nợ</th>
+                          <th>Rủi ro</th>
+                          <th>Kỳ</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {data.slice(0, 100).map((item, rowIndex) => (
+                          <tr
+                            key={`${item.maTsDg || 'row'}-${item.queryPeriod || rowIndex}-${rowIndex}`}
+                            className={Array.isArray(item.risks) && item.risks.length > 0 ? 'ai-risk-row' : ''}
+                          >
+                            <td>
+                              <strong className={Array.isArray(item.risks) && item.risks.length > 0 ? 'risk-asset-code' : ''}>
+                                {item.maTsDg || '-'}
+                              </strong>
+                              {persistentRiskById.has(item.maTsDg) && (
+                                <span className="persistent-risk-badge">
+                                  ⚠ ≥{persistentRiskById.get(item.maTsDg).consecutivePeriods} kỳ
+                                </span>
+                              )}
+                            </td>
+                            <td>{item.tenTaiSan || item.moTaTs || '-'}</td>
+                            <td>{item.loaiTsCap2 || item.nhomTsCap1 || '-'}</td>
+                            <td>{item.tinhTp || '-'}</td>
+                            <td>
+                              {item.gtDinhGia !== null && item.gtDinhGia !== undefined
+                                ? formatBillion(item.gtDinhGia)
+                                : '-'}
+                            </td>
+                            <td>{item.maTsbd || '-'}</td>
+                            <td>
+                              {item.duNoTsbd !== null && item.duNoTsbd !== undefined
+                                ? formatBillion(item.duNoTsbd)
+                                : '-'}
+                            </td>
+                            <td>
+                              {Array.isArray(item.risks) && item.risks.length > 0
+                                ? [...new Set(item.risks.map((risk) => risk.loaiRuiRo).filter(Boolean))].join(', ')
+                                : '-'}
+                            </td>
+                            <td>{item.queryPeriod || job.result?.timeContext?.period || '-'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
               <details className="ai-technical-details">
                 <summary>
                   Xem chi tiết truy vấn
@@ -2623,26 +2907,64 @@ const handleViewAssetDetail = (asset) => {
       
       <section className="table-section">
   <div className="table-header">
-    <div>
-      <h2>
-        {timeMode === 'Một kỳ'
-          ? 'Chi tiết tài sản'
-          : 'Chi tiết biến động tài sản'}
-      </h2>
+  <div>
+    <h2>
+      {timeMode === 'Một kỳ'
+        ? 'Chi tiết tài sản'
+        : 'Chi tiết biến động tài sản'}
+    </h2>
 
-      <p>
-        {timeMode === 'Một kỳ'
-          ? 'Danh sách đồng bộ với Map và bộ lọc.'
-          : `So sánh ${fromPeriod} → ${toPeriod}`}
-      </p>
+    <p>
+      {timeMode === 'Một kỳ'
+        ? 'Danh sách đồng bộ với Map và bộ lọc.'
+        : `So sánh ${fromPeriod} → ${toPeriod}`}
+    </p>
+  </div>
+
+  <div className="table-header-actions">
+    <div className="asset-search">
+      <span className="asset-search-icon">
+        ⌕
+      </span>
+
+      <input
+        type="text"
+        value={searchText}
+        onChange={(event) =>
+          setSearchText(event.target.value)
+        }
+        placeholder="Tìm kiếm mã TS, mã TSBĐ, tỉnh/thành phố..."
+      />
+
+      {searchText && (
+        <button
+          type="button"
+          className="asset-search-clear"
+          onClick={() =>
+            setSearchText('')
+          }
+          aria-label="Xóa tìm kiếm"
+        >
+          ×
+        </button>
+      )}
     </div>
 
-    <span>
+    <span className="table-result-count">
       {timeMode === 'Một kỳ'
-        ? `${filteredAssets.length} tài sản`
-        : `${filteredComparisonAssets.length} tài sản`}
+        ? `${filteredAssets.length} tài sản${
+            filteredAssets.length > TABLE_RENDER_LIMIT
+              ? ` · hiển thị ${TABLE_RENDER_LIMIT}`
+              : ''
+          }`
+        : `${filteredComparisonAssets.length} tài sản${
+            filteredComparisonAssets.length > TABLE_RENDER_LIMIT
+              ? ` · hiển thị ${TABLE_RENDER_LIMIT}`
+              : ''
+          }`}
     </span>
   </div>
+</div>
 
   <div className="table-wrapper">
     {timeMode === 'Một kỳ' ? (
@@ -2661,20 +2983,29 @@ const handleViewAssetDetail = (asset) => {
         </thead>
 
         <tbody>
-          {filteredAssets.map((asset) => (
+          {tableAssets.map((asset) => (
             <tr
               key={asset.maTsDg}
               id={`asset-row-${asset.maTsDg}`}
               onClick={() =>
   handleSelectAssetFromTable(asset.maTsDg)
 }
-              className={
-                selectedAssetId === asset.maTsDg
-                  ? 'selected-table-row'
-                  : ''
-              }
+              className={[
+                selectedAssetId === asset.maTsDg ? 'selected-table-row' : '',
+                Array.isArray(asset.risks) && asset.risks.length > 0 ? 'risk-table-row' : '',
+                persistentRiskById.has(asset.maTsDg) ? 'persistent-risk-table-row' : '',
+              ].filter(Boolean).join(' ')}
             >
-              <td>{asset.maTsDg}</td>
+              <td>
+                <span className={Array.isArray(asset.risks) && asset.risks.length > 0 ? 'risk-asset-code' : ''}>
+                  {asset.maTsDg}
+                </span>
+                {persistentRiskById.has(asset.maTsDg) && (
+                  <span className="persistent-risk-badge">
+                    ⚠ ≥{persistentRiskById.get(asset.maTsDg).consecutivePeriods} kỳ
+                  </span>
+                )}
+              </td>
               <td>{asset.nhomTsCap1}</td>
               <td>{asset.loaiTsCap2}</td>
               <td>{asset.tinhTp}</td>
@@ -2718,7 +3049,7 @@ const handleViewAssetDetail = (asset) => {
         </thead>
 
         <tbody>
-          {filteredComparisonAssets.map((item) => (
+          {sliceForTable(filteredComparisonAssets).map((item) => (
   <tr
     key={item.maTsDg}
     id={`asset-row-${item.maTsDg}`}
@@ -2800,11 +3131,16 @@ const handleViewAssetDetail = (asset) => {
         ? 'status-release'
         : 'status-stable'
 
+    const statusLabel =
+      displayStatus === 'Phát sinh mới'
+        ? 'Tài sản phát sinh mới'
+        : displayStatus
+
     return (
       <span
         className={`change-status ${statusClass}`}
       >
-        {displayStatus}
+        {statusLabel}
       </span>
     )
   })()}
@@ -2816,6 +3152,72 @@ const handleViewAssetDetail = (asset) => {
     )}
   </div>
 </section>
+
+<footer className="gn-footer">
+  <div className="gn-footer-main">
+    <div className="gn-footer-brand">
+      <img
+        src={tsbdLogo}
+        alt="MSB - Trung tâm Định giá & Quản lý TSBĐ"
+        className="gn-footer-logo"
+      />
+
+      <div>
+        <div className="gn-footer-unit">
+          Trung tâm Định giá & Quản lý TSBĐ
+        </div>
+
+        <div className="gn-footer-slogan">
+          Kết nối dữ liệu – Nhận diện rủi ro – Hỗ trợ ra quyết định
+        </div>
+      </div>
+    </div>
+
+    <div className="gn-footer-links">
+      <div className="gn-footer-link">
+        <span className="gn-footer-icon">▣</span>
+        <span>Hướng dẫn sử dụng</span>
+      </div>
+
+      <div className="gn-footer-link">
+        <span className="gn-footer-icon">◫</span>
+        <span>Gửi phản hồi</span>
+      </div>
+
+      <div className="gn-footer-link">
+        <span className="gn-footer-icon">◉</span>
+        <span>Liên hệ hỗ trợ: longtk1@msb.com.vn</span>
+      </div>
+    </div>
+
+    <div className="gn-footer-status">
+      <div>Phiên bản: V1.0.0</div>
+      <div>Dữ liệu cập nhật: 08/2026</div>
+
+      <div className="gn-footer-online">
+        <span className="gn-footer-online-dot" />
+        Hệ thống đang hoạt động
+      </div>
+    </div>
+
+    <div className="gn-footer-policy">
+      <div>Chính sách bảo mật</div>
+      <div>Điều khoản sử dụng</div>
+    </div>
+  </div>
+
+  <div className="gn-footer-bottom">
+  <span>
+  © 2026 MSB · Hệ thống sử dụng nội bộ · Phạm vi dữ liệu hiển thị phụ thuộc quyền truy cập của người dùng.
+  {' '}· Sản phẩm do team LongTK1 & NhanNT31 thực hiện.
+</span>
+
+    <span className="gn-footer-motto">
+      Cùng tiến xa hơn
+    </span>
+  </div>
+</footer>
+
     </div>
   )
 }

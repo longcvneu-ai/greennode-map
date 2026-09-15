@@ -1,4 +1,4 @@
-import { generateCollateralAssets } from './mockDataGenerator'
+import { generateCollateralAssets } from './mockDataGenerator.js'
 export const collateralAssets = [
   {
     recordId: 'COL_REC_001',

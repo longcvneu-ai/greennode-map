@@ -4,11 +4,11 @@ import {
   AI_METRICS,
   AI_CHANGE_TYPES,
   createEmptyAIQuery,
-} from './aiQueryContract'
+} from './aiQueryContract.js'
 
-import { validateAIQuery } from './aiQueryValidator'
+import { validateAIQuery } from './aiQueryValidator.js'
 
-import { executeAIQuery } from './aiQueryEngine'
+import { executeAIQuery } from './aiQueryEngine.js'
 
 // TEST 1: Query hợp lệ
 const validQuery = createEmptyAIQuery()

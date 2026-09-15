@@ -1,6 +1,11 @@
 import express from 'express'
 import cors from 'cors'
 import dotenv from 'dotenv'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import {
+  sanitizeEnrichment,
+} from '../src/AI/v2/riskAnalysisFormatter.js'
 
 dotenv.config()
 
@@ -10,10 +15,19 @@ app.use(cors())
 app.use(express.json())
 
 const GREENNODE_BASE_URL =
+  process.env.GREENNODE_BASE_URL ||
   'https://maas-llm-aiplatform-hcm.api.vngcloud.vn/v1'
 
 const GREENNODE_MODEL =
+  process.env.GREENNODE_MODEL ||
   'qwen/qwen3.6-flash'
+
+const GREENNODE_TIMEOUT_MS =
+  Number(process.env.GREENNODE_TIMEOUT_MS || 30000)
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+const DIST_DIR = path.resolve(__dirname, '../dist')
 
 app.get('/health', (req, res) => {
   res.json({
@@ -230,46 +244,52 @@ Nếu thiếu thông tin:
   "error": "INSUFFICIENT_INFORMATION"
 }
 `
-const modelStartTime = performance.now()
-    const response = await fetch(
-      `${GREENNODE_BASE_URL}/chat/completions`,
-      {
-        method: 'POST',
-
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${process.env.GREENNODE_API_KEY}`,
-        },
-
-        body: JSON.stringify({
-          model: GREENNODE_MODEL,
-
-          messages: [
-            {
-              role: 'system',
-              content: systemPrompt,
-            },
-            {
-              role: 'user',
-              content: question,
-            },
-          ],
-
-          temperature: 0,
-          max_tokens: 512,
-          top_p: 0.95,
-        }),
-      }
+    const controller = new AbortController()
+    const timeoutId = setTimeout(
+      () => controller.abort(),
+      GREENNODE_TIMEOUT_MS
     )
+
+    const modelStartTime = performance.now()
+    let response
+    try {
+      response = await fetch(
+        `${GREENNODE_BASE_URL}/chat/completions`,
+        {
+          method: 'POST',
+          signal: controller.signal,
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${process.env.GREENNODE_API_KEY}`,
+          },
+          body: JSON.stringify({
+            model: GREENNODE_MODEL,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: question },
+            ],
+            temperature: 0,
+            max_tokens: 512,
+            top_p: 0.95,
+          }),
+        }
+      )
+    } catch (error) {
+      if (error?.name === 'AbortError') {
+        return res.status(504).json({
+          success: false,
+          error: 'GREENNODE_TIMEOUT',
+        })
+      }
+      throw error
+    } finally {
+      clearTimeout(timeoutId)
+    }
 
     const modelEndTime = performance.now()
 
 const modelDurationMs =
   modelEndTime - modelStartTime
-
-console.log(
-  `GreenNode model time: ${modelDurationMs.toFixed(0)} ms`
-)
 
     const rawData = await response.json()
 
@@ -305,11 +325,7 @@ console.log(
     
     queryPlan = normalizeQueryPlan(queryPlan)
 
-console.log(
-  'GreenNode model time:',
-  Math.round(modelDurationMs),
-  'ms'
-)
+
 
 return res.json({
   success: true,
@@ -329,10 +345,216 @@ return res.json({
   }
 })
 
-const PORT = 3001
+/*
+  ======================================================
+  /api/ai/risk-analysis (V2.6.7 Risk Intelligence)
+  ======================================================
 
-app.listen(PORT, () => {
-  console.log(
-    `GreenNode Map backend running at http://localhost:${PORT}`
-  )
+  Evidence-grounded enrichment layer:
+  - evidence (RiskContext) is computed deterministically by the client engine
+    and is the single source of truth.
+  - The LLM may only interpret the supplied evidence. Every number it echoes
+    must exist in the evidence; unsupported conclusions (credit loss / default /
+    fraud / legal) are stripped before the response reaches the user.
+*/
+
+const RISK_SEVERITY_VALUES = ['LOW', 'MEDIUM', 'HIGH']
+
+const riskAnalysisSystemPrompt = `
+Bạn là công cụ phân tích rủi ro định giá (Risk Intelligence) cho GreenNode Map.
+
+Bạn nhận DUY NHẤT một khối bằng chứng JSON ("evidence") do hệ thống tính toán sẵn.
+Bạn không có quyền truy cập dữ liệu khác và không được tự sinh con số nào.
+
+ĐƯỢC PHÉP:
+- Nêu các mẫu (pattern) nổi bật đang có trong bằng chứng.
+- Giải thích vì sao một tín hiệu đáng chú ý, dựa trên dữ liệu trong bằng chứng.
+- Sắp xếp ưu tiên các quan sát.
+- Đề xuất bước kiểm tra / hành động tiếp theo thiết thực, dựa trên bằng chứng.
+- Nếu evidence.ranking cho biết isTie=true, PHẢI giữ nguyên toàn bộ nhóm đồng hạng; tuyệt đối không chọn một phần tử duy nhất làm "cao nhất" hoặc ưu tiên riêng nếu bằng chứng không có tiêu chí phá hòa.
+
+CẤM:
+- Bịa sự kiện, con số, trường dữ liệu, nguyên nhân, xác suất, kết luận rủi ro
+  không có trong bằng chứng.
+- Suy diễn tổn thất tín dụng / vỡ nợ / gian lận / rủi ro pháp lý trừ khi bằng
+  chứng trực tiếp hỗ trợ.
+- Trích dẫn số liệu không nằm trong bằng chứng.
+- Thêm cảnh báo chung chung không liên quan tới bằng chứng.
+
+Nếu bằng chứng không đủ để phân tích, chỉ trả về:
+{"error":"INSUFFICIENT_INFORMATION"}
+
+Chỉ trả về JSON hợp lệ theo schema:
+{"riskSeverity":"LOW","analysis":"...","priorities":["..."]}
+- riskSeverity: một trong LOW, MEDIUM, HIGH.
+- analysis: văn bản định tính (không yêu cầu kèm số; nếu có số phải trùng số trong bằng chứng).
+- priorities: tối đa 3 chuỗi hành động ưu tiên.
+
+NGẮN GỌN: trả lời thật ngắn gọn, súc tích (analysis tối đa ~220 chữ).
+Không lặp lại toàn bộ số liệu; chỉ nêu tín hiệu nổi bật và hành động kiểm tra cụ thể.
+`
+
+app.post('/api/ai/risk-analysis', async (req, res) => {
+  try {
+    const { question, evidence } = req.body
+
+    if (!question) {
+      return res.status(400).json({
+        success: false,
+        error: 'QUESTION_REQUIRED',
+      })
+    }
+
+    if (!evidence || typeof evidence !== 'object' || !evidence.scope) {
+      return res.status(400).json({
+        success: false,
+        error: 'EVIDENCE_REQUIRED',
+      })
+    }
+
+    if (!process.env.GREENNODE_API_KEY) {
+      return res.status(500).json({
+        success: false,
+        error: 'GREENNODE_API_KEY_MISSING',
+      })
+    }
+
+    const controller = new AbortController()
+    const timeoutId = setTimeout(
+      () => controller.abort(),
+      GREENNODE_TIMEOUT_MS
+    )
+
+    const modelStartTime = performance.now()
+    let response
+    try {
+      response = await fetch(
+        `${GREENNODE_BASE_URL}/chat/completions`,
+        {
+          method: 'POST',
+          signal: controller.signal,
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${process.env.GREENNODE_API_KEY}`,
+          },
+          body: JSON.stringify({
+            model: GREENNODE_MODEL,
+            messages: [
+              { role: 'system', content: riskAnalysisSystemPrompt },
+              { role: 'user', content: JSON.stringify({ question, evidence }) },
+            ],
+            temperature: 0,
+            max_tokens: 300,
+            top_p: 0.95,
+          }),
+        }
+      )
+    } catch (error) {
+      if (error?.name === 'AbortError') {
+        return res.status(504).json({
+          success: false,
+          error: 'GREENNODE_TIMEOUT',
+        })
+      }
+      throw error
+    } finally {
+      clearTimeout(timeoutId)
+    }
+
+    const modelDurationMs = performance.now() - modelStartTime
+
+    const rawData = await response.json()
+
+    if (!response.ok) {
+      return res.status(response.status).json({
+        success: false,
+        error: 'GREENNODE_API_ERROR',
+        details: rawData,
+      })
+    }
+
+    const content = rawData?.choices?.[0]?.message?.content
+
+    if (!content) {
+      return res.status(502).json({
+        success: false,
+        error: 'EMPTY_MODEL_RESPONSE',
+      })
+    }
+
+    let parsed
+    try {
+      parsed = JSON.parse(content)
+    } catch {
+      return res.status(502).json({
+        success: false,
+        error: 'INVALID_MODEL_JSON',
+        rawContent: content,
+      })
+    }
+
+    if (parsed?.error === 'INSUFFICIENT_INFORMATION') {
+      return res.json({
+        success: false,
+        error: 'INSUFFICIENT_INFORMATION',
+      })
+    }
+
+    if (
+      !parsed ||
+      typeof parsed?.analysis !== 'string' ||
+      !RISK_SEVERITY_VALUES.includes(parsed?.riskSeverity)
+    ) {
+      return res.status(502).json({
+        success: false,
+        error: 'INVALID_MODEL_JSON',
+        rawContent: content,
+      })
+    }
+
+    const sanitized = sanitizeEnrichment(parsed, evidence)
+
+    if (!sanitized.analysis && sanitized.priorities.length === 0) {
+      return res.json({
+        success: false,
+        error: 'UNSUPPORTED_CONTENT',
+      })
+    }
+
+    return res.json({
+      success: true,
+      riskSeverity: sanitized.riskSeverity,
+      analysis: sanitized.analysis,
+      priorities: sanitized.priorities,
+      text_removed: sanitized.sanitized,
+      timing: {
+        modelMs: Math.round(modelDurationMs),
+      },
+    })
+  } catch (error) {
+    console.error(error)
+
+    return res.status(500).json({
+      success: false,
+      error: 'SERVER_ERROR',
+    })
+  }
+})
+
+// Production: serve the Vite build from the same AgentBase runtime.
+app.use(express.static(DIST_DIR))
+app.use((req, res, next) => {
+  if (req.method !== 'GET' || req.path.startsWith('/api') || req.path === '/health') {
+    return next()
+  }
+  return res.sendFile(path.join(DIST_DIR, 'index.html'), (error) => {
+    if (error) next()
+  })
+})
+
+const PORT = Number(process.env.PORT || 8080)
+const HOST = process.env.HOST || '0.0.0.0'
+
+app.listen(PORT, HOST, () => {
+  console.log(`GreenNode Map running on ${HOST}:${PORT}`)
 })
