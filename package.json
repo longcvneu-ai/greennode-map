@@ -1,13 +1,30 @@
 {
   "name": "greennode-map",
   "private": true,
-  "version": "0.0.0",
+  "version": "2.6.7",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "start": "node server/server.js",
+    "test:60k": "node src/services/performance60000SnapshotTest.js",
+    "test:tie": "node src/AI/v2/v264TieLocationRegressionTest.js",
+    "test:ai": "node src/AI/v2/riskIntentPlannerScenarioTest.js",
+    "test:analytical": "node src/AI/v2/v266AnalyticalFallbackTest.js",
+    "test:adversarial": "node src/AI/v2/v266AdversarialRoutingTest.js",
+    "test:risk": "node src/AI/v2/v267RiskAnalysisTest.js",
+    "test:production": "npm run build && npm run test:60k && npm run test:tie && npm run test:ai && npm run test:analytical && npm run test:risk && npm run test:preflight",
+    "test:preflight": "node src/AI/v2/productionPreflightTest.js",
+    "test:final-uat": "node src/AI/v2/v267FinalUatTest.js",
+    "test:persistent-risk": "node src/services/persistentRiskServiceTest.js",
+    "test:guardrail": "node src/services/rangeGuardrailTest.js",
+    "test:persistent-ui": "node src/AI/v2/v267PersistentUiFlowTest.js",
+    "test:excel30k-map-kpi": "node src/AI/v2/v267Excel30kMapKpiIntegrationTest.js",
+    "test:real-excel": "node src/AI/v2/v267RealExcelRegressionTest.js",
+    "test:final-regression": "npm run test:ranking-invariant && npm run test:real-excel && npm run test:persistent-ui && npm run test:persistent-risk && npm run test:excel30k-map-kpi && npm run test:final-uat && npm run test:risk && npm run test:analytical && npm run test:adversarial && npm run test:ai && npm run test:tie && npm run test:preflight && npm run test:60k",
+    "test:ranking-invariant": "node src/AI/v2/v267RankingInvariantTest.js"
   },
   "dependencies": {
     "cors": "^2.8.6",
@@ -17,6 +34,7 @@
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-leaflet": "^5.0.0",
+    "react-leaflet-cluster": "^4.1.3",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

@@ -8,7 +8,7 @@ import {
   QUERY_PLAN_GROUP_FIELDS,
   QUERY_PLAN_LOOKUP_FIELDS,
   QUERY_PLAN_COMPARE_FIELDS,
-} from './queryPlanContract'
+} from './queryPlanContract.js'
 
 
 function isAllowedValue(value, allowedObject) {
@@ -80,9 +80,37 @@ if (plan.steps.length === 0) {
       `Step ${index + 1}: FILTER phải có field.`
     )
   }
-   
-}
 
+  if (
+    !isAllowedValue(
+      step.operator,
+      QUERY_PLAN_OPERATORS
+    )
+  ) {
+    errors.push(
+      `Step ${index + 1}: FILTER operator không hợp lệ: ${step.operator}`
+    )
+  }
+
+  const operatorDoesNotNeedValue =
+    step.operator ===
+      QUERY_PLAN_OPERATORS.EMPTY ||
+    step.operator ===
+      QUERY_PLAN_OPERATORS.NOT_EMPTY
+
+  if (
+    !operatorDoesNotNeedValue &&
+    (
+      step.value === undefined ||
+      step.value === null ||
+      step.value === ''
+    )
+  ) {
+    errors.push(
+      `Step ${index + 1}: FILTER phải có value.`
+    )
+  }
+}
      
 
     if (

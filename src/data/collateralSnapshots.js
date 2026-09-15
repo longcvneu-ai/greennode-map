@@ -1,4 +1,4 @@
-import { generateCollateralSnapshots } from './mockDataGenerator'
+import { generateCollateralSnapshots } from './mockDataGenerator.js'
 export const collateralSnapshots = [
   {
     kyBaoCao: '2026-06-30',

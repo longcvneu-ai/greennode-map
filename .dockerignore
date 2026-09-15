@@ -1,0 +1,8 @@
+node_modules
+dist
+.git
+.env
+*.log
+New folder.zip
+greennode-agentbase-skills
+.agentbase/

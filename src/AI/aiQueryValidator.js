@@ -5,7 +5,7 @@ import {
   AI_TIME_MODES,
   AI_METRICS,
   AI_CHANGE_TYPES,
-} from './aiQueryContract'
+} from './aiQueryContract.js'
 
 function isAllowedValue(value, allowedObject) {
   if (value == null) {

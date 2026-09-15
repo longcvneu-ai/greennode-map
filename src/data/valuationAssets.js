@@ -1,4 +1,4 @@
-import { generateValuationAssets } from './mockDataGenerator'
+import { generateValuationAssets } from './mockDataGenerator.js'
 export const valuationAssets = [
   {
     recordId: 'VAL_REC_001',

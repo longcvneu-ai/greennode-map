@@ -3,16 +3,16 @@
 import {
   getAssetsByReportingPeriod,
   getCollateralSnapshotByPeriodAndAsset,
-} from '../services/assetService'
+} from '../services/assetService.js'
 
 import {
   AI_QUERY_INTENTS,
   AI_CHANGE_TYPES,
-} from './aiQueryContract'
+} from './aiQueryContract.js'
 
 import {
   validateAIQuery,
-} from './aiQueryValidator'
+} from './aiQueryValidator.js'
 
 
 function applyFilters(assets, filters = {}) {

@@ -526,53 +526,95 @@ export const buildCanonicalExcelData = (
       }
     }
   )
-const collateralAssets =
-  Array.from(
-    collateralRecordIdByMaTsbd.entries()
-  ).map(
-    ([maTsbd, recordId]) => {
-      const relatedRows =
-        extractedData.collateralSnapshots.filter(
-          (row) =>
-            row.maTsbd === maTsbd
+/*
+    PERFORMANCE V2.6:
+    Nhóm snapshot TSBĐ trong đúng một lượt quét O(n).
+
+    Bản cũ gọi .filter() toàn bộ collateralSnapshots cho MỖI maTsbd,
+    tạo độ phức tạp gần O(n²). Với 24.000 TSBĐ có thể phải thực hiện
+    hàng trăm triệu phép so sánh và làm treo main thread trình duyệt.
+  */
+  const collateralSummaryByMaTsbd = new Map()
+
+  extractedData.collateralSnapshots.forEach(
+    (row) => {
+      if (!row.maTsbd) {
+        return
+      }
+
+      const current =
+        collateralSummaryByMaTsbd.get(
+          row.maTsbd
         )
 
-      const firstRow =
-        relatedRows[0]
-
-      const rowWithReleaseDate =
-        relatedRows.find(
-          (row) =>
-            row.ngayGiaiChap !== null &&
-            row.ngayGiaiChap !== undefined &&
-            row.ngayGiaiChap !== ''
+      if (!current) {
+        collateralSummaryByMaTsbd.set(
+          row.maTsbd,
+          {
+            firstRow: row,
+            releaseRow:
+              row.ngayGiaiChap !== null &&
+              row.ngayGiaiChap !== undefined &&
+              row.ngayGiaiChap !== ''
+                ? row
+                : null,
+          }
         )
+        return
+      }
 
-      return {
-        recordId,
-
-        valuationRecordId:
-          valuationRecordIdByMaTsDg.get(
-            firstRow?.maTsDg
-          ) || null,
-
-        maTsDg:
-          firstRow?.maTsDg || null,
-
-        maTsbd,
-
-        ngayNhanTsbd:
-          normalizeExcelDate(
-            firstRow?.ngayNhanTsbd
-          ),
-
-        ngayGiaiChap:
-          normalizeExcelDate(
-            rowWithReleaseDate?.ngayGiaiChap
-          ),
+      if (
+        !current.releaseRow &&
+        row.ngayGiaiChap !== null &&
+        row.ngayGiaiChap !== undefined &&
+        row.ngayGiaiChap !== ''
+      ) {
+        current.releaseRow = row
       }
     }
   )
+
+  const collateralAssets =
+    Array.from(
+      collateralRecordIdByMaTsbd.entries()
+    ).map(
+      ([maTsbd, recordId]) => {
+        const summary =
+          collateralSummaryByMaTsbd.get(
+            maTsbd
+          )
+
+        const firstRow =
+          summary?.firstRow
+
+        const rowWithReleaseDate =
+          summary?.releaseRow
+
+        return {
+          recordId,
+
+          valuationRecordId:
+            valuationRecordIdByMaTsDg.get(
+              firstRow?.maTsDg
+            ) || null,
+
+          maTsDg:
+            firstRow?.maTsDg || null,
+
+          maTsbd,
+
+          ngayNhanTsbd:
+            normalizeExcelDate(
+              firstRow?.ngayNhanTsbd
+            ),
+
+          ngayGiaiChap:
+            normalizeExcelDate(
+              rowWithReleaseDate?.ngayGiaiChap
+            ),
+        }
+      }
+    )
   const collateralSnapshots =
     extractedData.collateralSnapshots.map(
       (row) => ({

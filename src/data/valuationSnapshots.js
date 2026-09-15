@@ -1,4 +1,4 @@
-import { generateValuationSnapshots } from './mockDataGenerator'
+import { generateValuationSnapshots } from './mockDataGenerator.js'
 export const valuationSnapshots = [
   // VAL_REC_001
   {
