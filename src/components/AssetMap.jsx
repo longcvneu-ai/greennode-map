@@ -1,4 +1,4 @@
-import {
+﻿import {
   MapContainer,
   TileLayer,
   Marker,
@@ -7,11 +7,13 @@ import {
 } from 'react-leaflet'
 
 import MarkerClusterGroup from 'react-leaflet-cluster'
+import { useLeafletContext } from '@react-leaflet/core'
 
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
-import { memo, useEffect, useMemo, useRef } from 'react'
-import { buildProvinceSummaries } from '../services/mapSummaryService.js'
+import { memo, useCallback, useEffect, useMemo, useRef } from 'react'
+import { prepareMapData } from '../services/coordinateProvenanceService.js'
+import { mark, perfEnabled } from '../services/mapPerfMarks.js'
 
 delete L.Icon.Default.prototype._getIconUrl
 
@@ -23,6 +25,20 @@ L.Icon.Default.mergeOptions({
   shadowUrl:
     'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
 })
+
+/* ===== TEMP PROFILE (10K general-filter perf UAT) — REMOVE BEFORE SHIP ===== */
+const gnT = {
+  on() {
+    try {
+      return !!(typeof window !== 'undefined' && window.__GN_PROFILE__ && window.__GN_PROFILE__.enabled)
+    } catch { return false }
+  },
+  begin(ev) { if (!this.on()) return; const s = window.__GN_PROFILE__; (s._t = s._t || {})[ev] = performance.now() },
+  end(ev) { if (!this.on()) return; const s = window.__GN_PROFILE__; const t = (s._t || {})[ev]; if (typeof t !== 'number') return; if (s._t) delete s._t[ev]; s.events.push({ ev, delta: performance.now() - t }) },
+  event(ev) { if (!this.on()) return; window.__GN_PROFILE__.events.push({ ev, at: performance.now() }) },
+  count(ev) { if (!this.on()) return; const s = window.__GN_PROFILE__; s.counts[ev] = (s.counts[ev] || 0) + 1 },
+}
+/* ===== END TEMP PROFILE ===== */
 
 const safeAssetIcon = L.divIcon({
   className: 'asset-risk-marker-wrapper',
@@ -53,42 +69,85 @@ function MapUpdater({
   selectionAssets,
   selectedAssetId,
   markerRefs,
+  viewResetKey,
+  mapApiRef,
 }) {
   const map = useMap()
 
+  // Cho phép các handler click trong AssetMap dùng cùng instance Leaflet
+  // để drill-down (zoom/fit) mà không phải giữ map ở state cha.
+  useEffect(() => {
+    if (mapApiRef) {
+      mapApiRef.current = map
+    }
+    // Debug/e2e handle: cho phép script kiểm thử ngoài truy cập instance map.
+    window.__GN_MAP__ = map
+  }, [map, mapApiRef])
   // Khi bộ dữ liệu / bộ lọc thay đổi:
   // luôn hiển thị tổng quan các tài sản đang có trên map.
+  // Lưu ý: KHÔNG phụ thuộc viewResetKey — Xóa lọc không cần reset lại
+  // viewport (một zoom-out toàn bộ 10.000 marker trên cây cluster sẽ
+  // gây nghẽn main thread hàng chục giây).
+  //
+  // V2.6.7 PERF (10K general filter): fitBounds kéo theo MarkerClusterGroup
+  // dựng lại toàn cây cụm trên 10.000 marker. Chạy ngay trong effect của lần
+  // render bộ lọc làm chuỗi filter bị nghẽn 0.6-1.7s. Defer sang frame kế tiếp:
+  // ClusterMarkets đồng bộ marker ở frame N, fitBounds chạy ở frame N+1 —
+  // tách khỏi luồng render React, main thread không bị chặn khi đổi lọc.
+  const fitRafOuterRef = useRef(null)
+  const fitRafInnerRef = useRef(null)
   useEffect(() => {
-    // Any popup left open from the previous dataset/filter is stale.
-    map.closePopup()
+    if (fitRafOuterRef.current) cancelAnimationFrame(fitRafOuterRef.current)
+    if (fitRafInnerRef.current) cancelAnimationFrame(fitRafInnerRef.current)
 
-    if (fitAssets.length === 0) {
-      map.setView([16, 106], 5, { animate: false })
-      return
-    }
+    fitRafOuterRef.current = requestAnimationFrame(() => {
+      fitRafInnerRef.current = requestAnimationFrame(() => {
+        if (fitAssets.length === 0) {
+          gnT.count('map:setView')
+          map.setView([16, 106], 5, { animate: false })
+          return
+        }
 
-    const validPoints = fitAssets
-      .filter((asset) =>
-        Number.isFinite(Number(asset.latitude)) &&
-        Number.isFinite(Number(asset.longitude))
-      )
-      .map((asset) => [Number(asset.latitude), Number(asset.longitude)])
+        const validPoints = fitAssets
+          .filter((asset) =>
+            Number.isFinite(Number(asset.latitude)) &&
+            Number.isFinite(Number(asset.longitude))
+          )
+          .map((asset) => [Number(asset.latitude), Number(asset.longitude)])
 
-    if (validPoints.length === 0) {
-      map.setView([16, 106], 5, { animate: false })
-      return
-    }
+        if (validPoints.length === 0) {
+          gnT.count('map:setView')
+          map.setView([16, 106], 5, { animate: false })
+          return
+        }
 
-    // Invalidate first: importing Excel often changes panel dimensions.
-    // Fitting after that prevents a stale deep-zoom viewport from surviving.
-    map.invalidateSize({ animate: false })
-    const bounds = L.latLngBounds(validPoints)
-    map.fitBounds(bounds, {
-      padding: [50, 50],
-      maxZoom: validPoints.length > 1 ? 7 : 9,
-      animate: false,
+        // Invalidate first: importing Excel often changes panel dimensions.
+        // Fitting after that prevents a stale deep-zoom viewport from surviving.
+        gnT.count('map:invalidateSize')
+        map.invalidateSize({ animate: false })
+        const bounds = L.latLngBounds(validPoints)
+        gnT.count('map:fitBounds')
+        map.fitBounds(bounds, {
+          padding: [50, 50],
+          maxZoom: validPoints.length > 1 ? 7 : 9,
+          animate: false,
+        })
+        gnT.event('map:fit-onto-' + validPoints.length + '-points')
+      })
     })
+
+    return () => {
+      if (fitRafOuterRef.current) cancelAnimationFrame(fitRafOuterRef.current)
+      if (fitRafInnerRef.current) cancelAnimationFrame(fitRafInnerRef.current)
+    }
   }, [fitAssets, map])
+
+  // Chỉ cần đóng popup cũ khi bộ lọc bị xóa / view được reset —
+  // rẻ, không kéo theo zoom-out toàn bộ cây cluster.
+  useEffect(() => {
+    gnT.count('map:closePopup')
+    map.closePopup()
+  }, [map, viewResetKey])
 
   // Chỉ zoom sâu khi người dùng thực sự chọn một tài sản.
   useEffect(() => {
@@ -119,6 +178,7 @@ function MapUpdater({
         duration: 1,
       }
     )
+    gnT.count('map:flyTo')
 
     const timeoutId = setTimeout(() => {
       markerRefs.current[
@@ -135,6 +195,18 @@ function MapUpdater({
     map,
     markerRefs,
   ])
+
+  // V2.6.7 perf mark: dataset -> map usable (fitBounds đã hoàn tất).
+  useEffect(() => {
+    if (!perfEnabled()) return
+    mark('map:dataset-usable', {
+      fitPoints:
+        (fitAssets || []).filter((asset) =>
+          Number.isFinite(Number(asset.latitude)) &&
+          Number.isFinite(Number(asset.longitude))
+        ).length,
+    })
+  }, [fitAssets, map])
 
   return null
 }
@@ -171,16 +243,7 @@ function MapResizeHandler() {
   return null
 }
 
-function AssetMap({
-  assets,
-  selectedAssetId,
-  onViewDetail,
-  changeType,
-  valuationRisk,
-}) {
-  const markerRefs = useRef({})
-
- const createRiskClusterIcon = (cluster) => {
+const createRiskClusterIconFor = (valuationRisk) => (cluster) => {
   const childMarkers =
     cluster.getAllChildMarkers()
 
@@ -247,33 +310,448 @@ function AssetMap({
   })
 }
 
-  const assetsWithLocation = useMemo(
-    () => assets.filter(
-      (asset) =>
-        Number.isFinite(Number(asset.latitude)) &&
-        Number.isFinite(Number(asset.longitude))
+// Các marker tài sản là phần rất nặng (10.000 phần tử). Chúng KHÔNG phụ
+// thuộc selectedAssetId / viewResetKey / các thay đổi chỉ gây re-render
+// AssetMap (vd Xóa lọc). Memo hóa để Xóa lọc không phải reconcile lại toàn
+// bộ cây marker — khi đó click "Xóa lọc" chỉ tốn vài trăm ms thay vì hàng
+// chục giây nghẽn main thread.
+//
+// V2.6.7 PERF (10K general filter): trước đây mỗi lần đổi filter, React
+// tái tạo lại toàn bộ cây <Marker> (hàng ngàn fiber) bên trong
+// <MarkerClusterGroup> — đo được freeze 1.6s (1.667 TS) tới 13.7s (10.000 TS).
+// Thay bằng ClusterMarkets: đúng MỘT <MarkerClusterGroup> (giữ nguyên clustering,
+// spiderfyOnMaxZoom, iconCreateFunction), còn các marker được quản lý
+// imperatively bằng Leaflet — CHỈ diff phần dân số thay đổi, không tái dựng
+// lại React element cho 10.000 phần tử.
+const buildAssetPopupContent = (asset, changeType, onViewDetailRef) => {
+  const root = document.createElement('div')
+
+  const title = document.createElement('div')
+  title.className = 'popup-title'
+  title.textContent = asset.maTsDg
+
+  const subtitle = document.createElement('div')
+  subtitle.className = 'popup-subtitle'
+  subtitle.textContent = `${asset.loaiTsCap2 || ''} · ${asset.tinhTp || ''}`
+
+  root.append(title, subtitle)
+
+  const row = (label, valueText) => {
+    const r = document.createElement('div')
+    r.className = 'popup-row'
+    const s = document.createElement('span')
+    s.textContent = label
+    const strong = document.createElement('strong')
+    strong.textContent = valueText
+    r.append(s, strong)
+    return r
+  }
+
+  root.append(
+    row('Vị trí', asset.diaChiChiTiet || asset.tinhTp || 'Chưa xác định'),
+    row(
+      'Tọa độ',
+      `${Number(asset.latitude).toFixed(5)}, ${Number(asset.longitude).toFixed(5)}`
     ),
-    [assets]
+    row('GT định giá', `${(asset.gtDinhGia / 1000000000).toFixed(1)} tỷ`),
+    row(
+      'Dư nợ',
+      asset.duNoTsbd > 0
+        ? `${(asset.duNoTsbd / 1000000000).toFixed(1)} tỷ`
+        : '—'
+    )
   )
 
-  const LARGE_MAP_THRESHOLD = 5000
-  const useProvinceSummary =
-    assetsWithLocation.length > LARGE_MAP_THRESHOLD
+  if (
+    Array.isArray(asset.risks) &&
+    asset.risks.length > 0
+  ) {
+    const riskBlock = document.createElement('div')
+    riskBlock.className = 'popup-risk-block'
 
-  const provinceSummaries = useMemo(
-    () => useProvinceSummary
-      ? buildProvinceSummaries(assetsWithLocation)
-      : [],
-    [useProvinceSummary, assetsWithLocation]
+    const riskTitle = document.createElement('div')
+    riskTitle.className = 'popup-risk-title'
+    riskTitle.textContent = 'Rủi ro phát hiện'
+    riskBlock.append(riskTitle)
+
+    for (const risk of asset.risks) {
+      const item = document.createElement('div')
+      item.className = 'popup-risk-item'
+
+      const strong = document.createElement('strong')
+      strong.textContent = risk.loaiRuiRo
+      item.append(strong)
+
+      if (risk.ghiChu) {
+        const span = document.createElement('span')
+        span.textContent = risk.ghiChu
+        item.append(span)
+      }
+
+      riskBlock.append(item)
+    }
+
+    root.append(riskBlock)
+  }
+
+  if (changeType !== 'Tất cả') {
+    root.append(row('Biến động', changeType))
+  }
+
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.className = 'popup-detail-button'
+  button.textContent = 'Xem chi tiết'
+  button.addEventListener('click', (event) => {
+    event.stopPropagation()
+    onViewDetailRef.current?.(asset)
+  })
+
+  root.append(button)
+
+  return root
+}
+
+function ClusterMarkets({
+  assets,
+  changeType,
+  onMarkerClick,
+  onViewDetail,
+  markerRefs,
+}) {
+  const context = useLeafletContext()
+  const mcgRef = useRef(null)
+  const markerMapRef = useRef(new Map())
+
+  const onMarkerClickRef = useRef(onMarkerClick)
+  const onViewDetailRef = useRef(onViewDetail)
+  const changeTypeRef = useRef(changeType)
+  useEffect(() => {
+    onMarkerClickRef.current = onMarkerClick
+  }, [onMarkerClick])
+  useEffect(() => {
+    onViewDetailRef.current = onViewDetail
+  }, [onViewDetail])
+  useEffect(() => {
+    changeTypeRef.current = changeType
+  }, [changeType])
+
+  // layerContainer trong context được react-leaflet-cluster set = instance
+  // L.MarkerClusterGroup của <MarkerClusterGroup> bao ngoài.
+  useEffect(() => {
+    const mcg = context.layerContainer
+    if (mcg && mcg !== mcgRef.current) {
+      mcgRef.current = mcg
+    }
+  }, [context.layerContainer])
+
+  const assetsRef = useRef(assets)
+  useEffect(() => {
+    assetsRef.current = assets
+  }, [assets])
+
+  // V2.6.7 PERF (10K general filter): diff marker theo dân số lọc mới gây
+  // removeLayers/addLayers hàng nghìn marker + dựng lại cụm ngay trong effect.
+  // Defer sang rAF để lần render bộ lọc không chặn main thread (0.6-1.7s),
+  // KPI/table/notification cập nhật tức thì, map chỉ nhanh về sau 1 frame.
+  // assetsRef đảm bảo luôn diff theo dân số lọc MỚI NHẤT khi rAF chạy.
+  const syncRafRef = useRef(null)
+  useEffect(() => {
+    if (syncRafRef.current) cancelAnimationFrame(syncRafRef.current)
+    const mcg = mcgRef.current
+    if (!mcg) {
+      return
+    }
+
+    syncRafRef.current = requestAnimationFrame(() => {
+      const markerMap = markerMapRef.current
+      const currentAssets = assetsRef.current
+      const wanted = new Set()
+      const toAdd = []
+
+      // 1) Giữ/đồng bộ marker còn trong dân số lọc mới.
+      for (const asset of currentAssets) {
+        const id = asset.maTsDg
+        wanted.add(id)
+
+        let marker = markerMap.get(id)
+
+        if (!marker) {
+          marker = L.marker(
+            [asset.latitude, asset.longitude],
+            {
+              icon:
+                Array.isArray(asset.risks) &&
+                asset.risks.length > 0
+                  ? riskyAssetIcon
+                  : safeAssetIcon,
+            }
+          )
+          markerMap.set(id, marker)
+
+          marker.on('click', () => {
+            mark('map:marker-click')
+            onMarkerClickRef.current?.([id])
+          })
+
+          marker.bindPopup(
+            buildAssetPopupContent(
+              asset,
+              changeTypeRef.current,
+              onViewDetailRef
+            ),
+            { className: 'asset-popup' }
+          )
+
+          markerRefs.current[id] = marker
+          toAdd.push(marker)
+          gnT.count('imperativeMarkerCreate')
+          continue
+        }
+
+        // Marker đã tồn tại: chỉ cập nhật nếu dữ liệu thực sự đổi
+        // (vd import dataset mới). Với filter thay đổi thì coordinate/icon
+        // không đổi -> bỏ qua hoàn toàn (đây là phần rẻ nhất trong diff).
+        const lat = Number(asset.latitude)
+        const lng = Number(asset.longitude)
+        const markerLatLng = marker.getLatLng()
+        const icon =
+          Array.isArray(asset.risks) &&
+          asset.risks.length > 0
+            ? riskyAssetIcon
+            : safeAssetIcon
+
+        if (
+          markerLatLng.lat !== lat ||
+          markerLatLng.lng !== lng
+        ) {
+          marker.setLatLng([lat, lng])
+        }
+
+        if (marker.options.icon !== icon) {
+          marker.setIcon(icon)
+        }
+      }
+
+      // 2) Gỡ marker không còn trong dân số lọc mới.
+      const toRemove = []
+      for (const [id, marker] of markerMap) {
+        if (wanted.has(id)) {
+          continue
+        }
+        markerMap.delete(id)
+        if (mcg.hasLayer(marker)) {
+          toRemove.push(marker)
+        }
+        markerRefs.current[id] = null
+      }
+
+      // 3) Thực thi theo đúng thứ tự: xóa trước, thêm sau (Leaflet batch).
+      if (toRemove.length > 0) {
+        mcg.removeLayers(toRemove)
+        gnT.event('imperativeRemove:' + toRemove.length)
+      }
+      if (toAdd.length > 0) {
+        mcg.addLayers(toAdd)
+        gnT.event('imperativeAdd:' + toAdd.length)
+      }
+    })
+
+    return () => {
+      if (syncRafRef.current) cancelAnimationFrame(syncRafRef.current)
+    }
+  }, [assets])
+
+  return null
+}
+
+const AssetClusterLayer = memo(function AssetClusterLayer({
+  assets,
+  changeType,
+  valuationRisk,
+  onMarkerClick,
+  onClusterClick,
+  onViewDetail,
+  markerRefs,
+}) {
+  gnT.count('renderClusterLayer')
+  gnT.event('clusterLayerAssets:' + assets.length)
+  const createRiskClusterIcon = useMemo(
+    () => createRiskClusterIconFor(valuationRisk),
+    [valuationRisk]
   )
 
-  const mapFitAssets = useProvinceSummary
-    ? provinceSummaries
-    : assetsWithLocation
+  return (
+    <MarkerClusterGroup
+      animate={false}
+      chunkedLoading
+      showCoverageOnHover={false}
+      spiderfyOnMaxZoom
+      iconCreateFunction={createRiskClusterIcon}
+      onClick={onClusterClick}
+    >
+      <ClusterMarkets
+        assets={assets}
+        changeType={changeType}
+        markerRefs={markerRefs}
+        onMarkerClick={onMarkerClick}
+        onViewDetail={onViewDetail}
+      />
+    </MarkerClusterGroup>
+  )
+})
+
+function AssetMap({
+  assets,
+  selectedAssetId,
+  onViewDetail,
+  onAssetClick,
+  changeType,
+  valuationRisk,
+  viewResetKey,
+}) {
+  gnT.count('renderAssetMap')
+  const markerRefs = useRef({})
+  const mapApiRef = useRef(null)
+
+  // Routers luôn dùng ref mới nhất để giữ identity ổn định cho AssetClusterLayer.
+  const latestOnAssetClick = useRef(onAssetClick)
+  const latestOnViewDetail = useRef(onViewDetail)
+  useEffect(() => {
+    latestOnAssetClick.current = onAssetClick
+    latestOnViewDetail.current = onViewDetail
+  }, [onAssetClick, onViewDetail])
+
+  const handleMarkerClick = useCallback(
+    (asset) => {
+      mark('map:marker-click')
+      if (latestOnAssetClick.current) {
+        latestOnAssetClick.current([asset.maTsDg])
+      }
+    },
+    []
+  )
+
+  const handleViewDetailStable = useCallback(
+    (asset) => {
+      latestOnViewDetail.current?.(asset)
+    },
+    []
+  )
+
+  const handleClusterClick = useCallback(
+    (event) => {
+      const layer = event?.layer
+
+      if (!layer) {
+        return
+      }
+      mark('map:cluster-click')
+
+      // Cụm = NHIỀU tài sản: click phải drill-down (zoom vào vùng),
+      // KHÔNG đối xử như chọn một tài sản.
+      if (typeof layer.zoomToBounds === 'function') {
+        layer.zoomToBounds({ padding: [40, 40], maxZoom: 16 })
+        return
+      }
+
+      const map = mapApiRef.current
+      const bounds =
+        typeof layer.getBounds === 'function'
+          ? layer.getBounds()
+          : null
+
+      if (map && bounds) {
+        map.fitBounds(bounds, {
+          padding: [40, 40],
+          maxZoom: 16,
+          animate: false,
+        })
+      }
+    },
+    []
+  )
+
+  const handleProvinceClick = useCallback((item) => {
+    const map = mapApiRef.current
+
+    if (!map || !item) {
+      return
+    }
+    mark('map:province-click')
+
+    const latitude = Number(item.latitude)
+    const longitude = Number(item.longitude)
+
+    if (
+      !Number.isFinite(latitude) ||
+      !Number.isFinite(longitude)
+    ) {
+      return
+    }
+
+    map.flyTo(
+      [latitude, longitude],
+      Math.max(map.getZoom(), 9),
+      { duration: 0.6 }
+    )
+  }, [])
+
+  const {
+    exactAssets: assetsWithLocation,
+    provinceAssets,
+    provinceEntries,
+    provinceAssetsMap,
+    exactIdSet,
+    counts,
+    distinctCoordinateCount,
+  } = useMemo(() => {
+    gnT.begin('prepareMapData')
+    const result = prepareMapData(assets)
+    gnT.end('prepareMapData')
+    return result
+  }, [assets])
+
+  const useProvinceSummary = useMemo(
+    () => provinceAssets.length > 0,
+    [provinceAssets]
+  )
+
+  const mapFitAssets = useMemo(
+    () => [...assetsWithLocation, ...provinceEntries],
+    [assetsWithLocation, provinceEntries]
+  )
+
+  const displayedAssetCount = useMemo(
+    () =>
+      assetsWithLocation.length +
+      provinceEntries.reduce((sum, entry) => sum + entry.total, 0),
+    [assetsWithLocation, provinceEntries]
+  )
 
   const selectedAsset = selectedAssetId
-    ? assetsWithLocation.find((asset) => asset.maTsDg === selectedAssetId) || null
+    ? assets.find((asset) => asset.maTsDg === selectedAssetId) || null
     : null
+
+  const selectedMarkerPosition = useMemo(() => {
+    if (!selectedAsset || !useProvinceSummary) return null
+    if (exactIdSet.has(selectedAsset.maTsDg)) return null
+    const entry = provinceEntries.find(
+      (item) => item.province === selectedAsset.tinhTp
+    )
+    return entry ? [entry.latitude, entry.longitude] : null
+  }, [selectedAsset, useProvinceSummary, exactIdSet, provinceEntries])
+
+  // V2.6.7 perf mark: dữ liệu map đã chuẩn bị (provenance + distinct coords).
+  useEffect(() => {
+    if (!perfEnabled()) return
+    mark('map:prepared', {
+      exact: counts.exact,
+      province: counts.province,
+      none: counts.none,
+      distinct: distinctCoordinateCount,
+    })
+  }, [counts, distinctCoordinateCount])
 
   const createProvinceSummaryIcon = (item) =>
     L.divIcon({
@@ -293,7 +771,7 @@ function AssetMap({
     <div className="map-placeholder">
 
   <div className="map-summary map-summary-floating">
-    <strong>{assetsWithLocation.length}</strong>
+    <strong>{displayedAssetCount}</strong>
     <span>tài sản đang hiển thị</span>
   </div>
 <div className="map-risk-legend">
@@ -353,15 +831,20 @@ function AssetMap({
           selectionAssets={assetsWithLocation}
           selectedAssetId={selectedAssetId}
           markerRefs={markerRefs}
+          viewResetKey={viewResetKey}
+          mapApiRef={mapApiRef}
         />
 
 
-        {useProvinceSummary ? (
-          provinceSummaries.map((item) => (
+        {useProvinceSummary && (
+          provinceEntries.map((item) => (
             <Marker
               key={`province-${item.province}`}
               position={[item.latitude, item.longitude]}
               icon={createProvinceSummaryIcon(item)}
+              eventHandlers={{
+                click: () => handleProvinceClick(item),
+              }}
             >
               <Popup className="asset-popup">
                 <div className="popup-title">{item.province}</div>
@@ -374,136 +857,71 @@ function AssetMap({
                   <strong>{item.risk}</strong>
                 </div>
                 <div className="popup-subtitle">
-                  Lọc theo tỉnh/thành phố để xem marker chi tiết.
+                  Tọa độ theo cấp tỉnh/thành phố (không phải vị trí chính xác
+                  từng tài sản).
                 </div>
+
+                <div className="popup-asset-list">
+                  {(provinceAssetsMap.get(item.province) || [])
+                    .slice(0, 5)
+                    .map((asset) => (
+                      <button
+                        key={asset.maTsDg}
+                        type="button"
+                        className="popup-asset-row"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          onAssetClick?.([asset.maTsDg])
+                        }}
+                      >
+                        <span className="popup-asset-row-code">
+                          {asset.maTsDg}
+                        </span>
+                        <span className="popup-asset-row-name">
+                          {asset.tenTaiSan}
+                        </span>
+                      </button>
+                    ))}
+                </div>
+
+                <button
+                  type="button"
+                  className="popup-detail-button"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    if (!onAssetClick) {
+                      return
+                    }
+                    const provinceAssetIds = (
+                      provinceAssetsMap.get(item.province) || []
+                    )
+                      .map((asset) => asset.maTsDg)
+                    if (provinceAssetIds.length > 0) {
+                      onAssetClick(provinceAssetIds)
+                    }
+                  }}
+                >
+                  Lọc toàn tỉnh ({item.total})
+                </button>
               </Popup>
             </Marker>
           ))
-        ) : (
-        <MarkerClusterGroup
-        chunkedLoading
-        showCoverageOnHover={false}
-        spiderfyOnMaxZoom
-        iconCreateFunction={
-        createRiskClusterIcon
-         }
->
-        {assetsWithLocation.map((asset) => (
-          <Marker
-                key={asset.maTsDg}
-                position={[
-                  asset.latitude,
-                  asset.longitude,
-                ]}
-              icon={
-                Array.isArray(asset.risks) &&
-                asset.risks.length > 0
-                  ? riskyAssetIcon
-                  : safeAssetIcon
-              }
-            ref={(marker) => {
-              if (marker) {
-                markerRefs.current[asset.maTsDg] = marker
-              }
-            }}
-          >
-            <Popup className="asset-popup">
-
-              <div className="popup-title">
-                {asset.maTsDg}
-              </div>
-
-              <div className="popup-subtitle">
-                {asset.loaiTsCap2} · {asset.tinhTp}
-              </div>
-
-              <div className="popup-row">
-                <span>Vị trí</span>
-                <strong>{asset.diaChiChiTiet || asset.tinhTp || 'Chưa xác định'}</strong>
-              </div>
-
-              <div className="popup-row">
-                <span>Tọa độ</span>
-                <strong>{Number(asset.latitude).toFixed(5)}, {Number(asset.longitude).toFixed(5)}</strong>
-              </div>
-
-              <div className="popup-row">
-                <span>GT định giá</span>
-
-                <strong>
-                  {(asset.gtDinhGia / 1000000000).toFixed(1)} tỷ
-                </strong>
-              </div>
-
-              <div className="popup-row">
-                <span>Dư nợ</span>
-
-                <strong>
-                  {asset.duNoTsbd > 0
-                    ? `${(
-                        asset.duNoTsbd / 1000000000
-                      ).toFixed(1)} tỷ`
-                    : '—'}
-                </strong>
-              </div>
-
-
-            
-{Array.isArray(asset.risks) &&
-  asset.risks.length > 0 && (
-    <div className="popup-risk-block">
-      <div className="popup-risk-title">
-        Rủi ro phát hiện
-      </div>
-
-      {asset.risks.map((risk) => (
-        <div
-          key={risk.maRuiRo}
-          className="popup-risk-item"
-        >
-          <strong>
-            {risk.loaiRuiRo}
-          </strong>
-
-          {risk.ghiChu && (
-            <span>
-              {risk.ghiChu}
-            </span>
-          )}
-        </div>
-      ))}
-    </div>
-  )}
-{changeType !== 'Tất cả' && (
-  <div className="popup-row">
-    <span>Biến động</span>
-
-    <strong>
-      {changeType}
-    </strong>
-  </div>
-)}
-              <button
-                type="button"
-                className="popup-detail-button"
-                onClick={(event) => {
-                  event.stopPropagation()
-                  onViewDetail(asset)
-                }}
-              >
-                Xem chi tiết
-              </button>
-
-            </Popup>
-          </Marker>
-        ))}
-        </MarkerClusterGroup>
         )}
 
-        {useProvinceSummary && selectedAsset && (
+        <AssetClusterLayer
+          assets={assetsWithLocation}
+          changeType={changeType}
+          valuationRisk={valuationRisk}
+          markerRefs={markerRefs}
+          onMarkerClick={handleMarkerClick}
+          onClusterClick={handleClusterClick}
+          onViewDetail={handleViewDetailStable}
+        />
+
+        {useProvinceSummary && selectedAsset && !exactIdSet.has(selectedAsset.maTsDg) && selectedMarkerPosition && (
           <Marker
             key={`selected-${selectedAsset.maTsDg}`}
-            position={[selectedAsset.latitude, selectedAsset.longitude]}
+            position={selectedMarkerPosition}
             icon={
               Array.isArray(selectedAsset.risks) && selectedAsset.risks.length > 0
                 ? riskyAssetIcon
@@ -524,7 +942,11 @@ function AssetMap({
               </div>
               <div className="popup-row">
                 <span>Tọa độ</span>
-                <strong>{Number(selectedAsset.latitude).toFixed(5)}, {Number(selectedAsset.longitude).toFixed(5)}</strong>
+                <strong>
+                  {exactIdSet.has(selectedAsset.maTsDg)
+                    ? `${Number(selectedAsset.latitude).toFixed(5)}, ${Number(selectedAsset.longitude).toFixed(5)}`
+                    : 'Tọa độ cấp tỉnh'}
+                </strong>
               </div>
               <div className="popup-row">
                 <span>GT định giá</span>

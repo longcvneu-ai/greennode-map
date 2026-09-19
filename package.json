@@ -24,7 +24,8 @@
     "test:excel30k-map-kpi": "node src/AI/v2/v267Excel30kMapKpiIntegrationTest.js",
     "test:real-excel": "node src/AI/v2/v267RealExcelRegressionTest.js",
     "test:final-regression": "npm run test:ranking-invariant && npm run test:real-excel && npm run test:persistent-ui && npm run test:persistent-risk && npm run test:excel30k-map-kpi && npm run test:final-uat && npm run test:risk && npm run test:analytical && npm run test:adversarial && npm run test:ai && npm run test:tie && npm run test:preflight && npm run test:60k",
-    "test:ranking-invariant": "node src/AI/v2/v267RankingInvariantTest.js"
+    "test:ranking-invariant": "node src/AI/v2/v267RankingInvariantTest.js",
+    "test:map-gate": "node src/AI/v2/v267MapPerformanceGateTest.js"
   },
   "dependencies": {
     "cors": "^2.8.6",

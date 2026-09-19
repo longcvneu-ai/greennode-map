@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import './App.css'
 import {
   getAssetsByReportingPeriod,
@@ -15,6 +15,7 @@ import {
 } from './services/excelImportService'
 import AssetMap from './components/AssetMap'
 import { getPersistentRiskSummary } from './services/persistentRiskService'
+import { mark, perfEnabled } from './services/mapPerfMarks'
 
 import {
   buildComparisonAssets,
@@ -53,6 +54,21 @@ import tsbdLogo from './assets/tsbd-logo.png'
 
 import headerMottoBg from './assets/header-motto-bg.png'
 
+/* ===== TEMP PROFILE (10K general-filter perf UAT) — REMOVE BEFORE SHIP ===== */
+const gnT = {
+  on() {
+    try {
+      return !!(typeof window !== 'undefined' && window.__GN_PROFILE__ && window.__GN_PROFILE__.enabled)
+    } catch { return false }
+  },
+  begin(ev) { if (!this.on()) return; const s = window.__GN_PROFILE__; (s._t = s._t || {})[ev] = performance.now() },
+  end(ev) { if (!this.on()) return; const s = window.__GN_PROFILE__; const t = (s._t || {})[ev]; if (typeof t !== 'number') return; if (s._t) delete s._t[ev]; s.events.push({ ev, delta: performance.now() - t }) },
+  event(ev) { if (!this.on()) return; window.__GN_PROFILE__.events.push({ ev, at: performance.now() }) },
+  time(ev, fn) { if (!this.on()) return fn(); const s = window.__GN_PROFILE__; const t0 = performance.now(); const r = fn(); s.events.push({ ev, delta: performance.now() - t0 }); return r },
+  count(ev) { if (!this.on()) return; const s = window.__GN_PROFILE__; s.counts[ev] = (s.counts[ev] || 0) + 1 },
+}
+/* ===== END TEMP PROFILE ===== */
+
 function renderAiAnswer(answer) {
   const text = String(answer || '')
   const lines = text.split('\n')
@@ -72,7 +88,7 @@ function renderAiAnswer(answer) {
 }
 
 function App() {
-    
+  gnT.count('renderApp')
   const [objectType, setObjectType] = useState('Tất cả')
   const [assetGroup, setAssetGroup] = useState('Tất cả')
 const [province, setProvince] = useState('Tất cả')
@@ -83,7 +99,28 @@ const [timeMode, setTimeMode] = useState('Một kỳ')
 const [fromPeriod, setFromPeriod] = useState('2026-06-30')
 const [toPeriod, setToPeriod] = useState('2026-08-31')
 const [changeType, setChangeType] = useState('Tất cả')
+  useEffect(() => {
+    gnT.event('filter:settled')
+  }, [objectType, assetGroup, province, valuationUnit, valuationRisk, timeMode, reportingPeriod, fromPeriod, toPeriod, changeType])
   const [selectedAssetId, setSelectedAssetId] = useState(null)
+  const [mapFilterAssetIds, setMapFilterAssetIds] =
+    useState(null)
+  // Token nhỏ, rõ ràng: mỗi lần Xóa lọc tăng lên 1.
+  // AssetMap đưa token này vào deps của effect "fit overview"
+  // => ép map quay về tổng quan theo bộ lọc chung hiện tại.
+  const [mapViewResetKey, setMapViewResetKey] =
+    useState(0)
+  const [detailAsset, setDetailAsset] = useState(null)
+  const [notifOpen, setNotifOpen] = useState(false)
+  const [notifView, setNotifView] = useState('summary')
+  const [notifDetailItem, setNotifDetailItem] =
+    useState(null)
+  const [notifAllPage, setNotifAllPage] = useState(1)
+  const [notifDrawerTop, setNotifDrawerTop] =
+    useState(96)
+  const [notifClosing, setNotifClosing] =
+    useState(false)
+  const headerRef = useRef(null)
 const [searchText, setSearchText] =
   useState('')
   const [filterOpen, setFilterOpen] =
@@ -273,9 +310,10 @@ const matchesSearch = (asset) => {
 
 
 const filteredAssets = useMemo(() => {
+  gnT.begin('filterAssets')
   const sourceAssets = timeMode === 'Một kỳ' ? periodAssets : toPeriodAssets
 
-  return sourceAssets.filter((asset) => {
+  const result = sourceAssets.filter((asset) => {
     const matchObjectType =
       objectType === 'Tất cả' ||
       (objectType === 'TSBĐ đang bảo đảm' && asset.isActiveCollateral) ||
@@ -315,6 +353,8 @@ const filteredAssets = useMemo(() => {
 
     return matchObjectType && matchAssetGroup && matchProvince && matchValuationUnit && matchRisk && matchText
   })
+  gnT.end('filterAssets')
+  return result
 }, [
   timeMode,
   periodAssets,
@@ -335,60 +375,109 @@ const filteredAssets = useMemo(() => {
   phải giữ được tài sản ở cả đầu kỳ và cuối kỳ
   trước khi so sánh rủi ro.
 */
-const filteredFromPeriodAssets =
-  timeMode === 'Khoảng thời gian'
-    ? fromPeriodAssets.filter(
-        (asset) =>
-          matchesBaseFilters(asset) &&
-          matchesSearch(asset)
-      )
-    : []
-/*
-  Các kỳ nằm trong khoảng người dùng lựa chọn.
-*/
-const periodsInRange = reportingPeriods.filter(
-  (period) =>
-    period >= fromPeriod &&
-    period <= toPeriod
+const filteredFromPeriodAssets = useMemo(
+  () => {
+    gnT.begin('timeFilter')
+    const result =
+    timeMode === 'Khoảng thời gian'
+      ? fromPeriodAssets.filter(
+          (asset) =>
+            matchesBaseFilters(asset) &&
+            matchesSearch(asset)
+        )
+      : []
+    gnT.end('timeFilter')
+    return result
+  },
+  [
+    timeMode,
+    fromPeriodAssets,
+    objectType,
+    assetGroup,
+    province,
+    valuationUnit,
+    normalizedSearchText,
+  ]
 )
 
-/*
-  Tạo dữ liệu của từng kỳ trong khoảng.
+const periodsInRange = useMemo(
+  () =>
+    reportingPeriods.filter(
+      (period) =>
+        period >= fromPeriod &&
+        period <= toPeriod
+    ),
+  [reportingPeriods, fromPeriod, toPeriod]
+)
 
-  Ví dụ:
-  30/06 → danh sách tài sản
-  31/07 → danh sách tài sản
-  31/08 → danh sách tài sản
-*/
-const assetsByPeriodInRange =
-  timeMode === 'Khoảng thời gian' && fromPeriod !== toPeriod
-    ? periodsInRange.map((period) => ({
-        period,
-        assets:
-  getAssetsByReportingPeriod(
-  period,
-  activeDataset
-).filter(
-  (asset) =>
-    matchesBaseFilters(asset) &&
-    matchesSearch(asset)
-),
-      }))
-    : []
+const assetsByPeriodInRange = useMemo(
+  () => {
+    gnT.begin('timeFilterByPeriod')
+    const result =
+    timeMode === 'Khoảng thời gian' && fromPeriod !== toPeriod
+      ? periodsInRange.map((period) => ({
+          period,
+          assets:
+    getAssetsByReportingPeriod(
+    period,
+    activeDataset
+    ).filter(
+    (asset) =>
+      matchesBaseFilters(asset) &&
+      matchesSearch(asset)
+    ),
+        }))
+      : []
+    gnT.end('timeFilterByPeriod')
+    return result
+  },
+  [
+    timeMode,
+    fromPeriod,
+    toPeriod,
+    periodsInRange,
+    activeDataset,
+    objectType,
+    assetGroup,
+    province,
+    valuationUnit,
+    normalizedSearchText,
+  ]
+)
 
-const tableAssets =
-  filteredAssets.slice(0, TABLE_RENDER_LIMIT)
+const mapFilterIdSet = useMemo(
+  () =>
+    mapFilterAssetIds && mapFilterAssetIds.length > 0
+      ? new Set(mapFilterAssetIds)
+      : null,
+  [mapFilterAssetIds]
+)
 
-const totalAssets = filteredAssets.length
+const mapFilteredAssets = useMemo(
+  () =>
+    mapFilterIdSet
+      ? filteredAssets.filter((asset) =>
+          mapFilterIdSet.has(asset.maTsDg)
+        )
+      : filteredAssets,
+  [filteredAssets, mapFilterIdSet]
+)
+
+const tableAssets = gnT.time('table', () =>
+  mapFilteredAssets.slice(0, TABLE_RENDER_LIMIT)
+)
 
 const persistentRiskSummary = useMemo(() => {
+  gnT.begin('persistentRisk')
   const targetPeriod = timeMode === 'Một kỳ' ? reportingPeriod : toPeriod
-  return getPersistentRiskSummary({
+  const result = getPersistentRiskSummary({
     period: targetPeriod,
     dataset: activeDataset,
     assetIds: filteredAssets.map((asset) => asset.maTsDg),
     riskType: valuationRisk !== 'Tất cả' && valuationRisk !== 'Không phát hiện' ? valuationRisk : null,
   })
+  gnT.end('persistentRisk')
+  return result
 }, [timeMode, reportingPeriod, toPeriod, activeDataset, filteredAssets, valuationRisk])
 
 const persistentRiskById = useMemo(
@@ -396,39 +485,100 @@ const persistentRiskById = useMemo(
   [persistentRiskSummary]
 )
 
-const totalValuation = filteredAssets.reduce(
-  (sum, asset) => sum + asset.gtDinhGia,
-  0
+const notificationAlerts = useMemo(() => {
+  gnT.begin('notification')
+  const items = persistentRiskSummary.items || []
+  const result = {
+    alertCount: items.length,
+    visibleItems: items.slice(0, 5),
+    extraCount: Math.max(0, items.length - 5),
+  }
+  gnT.end('notification')
+  return result
+}, [persistentRiskSummary])
+
+const NOTIF_ALL_PAGE_SIZE = 20
+const notifAllPageItems = useMemo(() => {
+  gnT.begin('notificationAll')
+  const items = persistentRiskSummary.items || []
+  const start = (notifAllPage - 1) * NOTIF_ALL_PAGE_SIZE
+  const result = items.slice(start, start + NOTIF_ALL_PAGE_SIZE)
+  gnT.end('notificationAll')
+  return result
+}, [notifAllPage, persistentRiskSummary])
+const notifAllTotalPages = Math.max(
+  1,
+  Math.ceil(
+    (persistentRiskSummary.items || []).length /
+      NOTIF_ALL_PAGE_SIZE
+  )
 )
 
-const totalCollateralAssets = filteredAssets.filter(
-  (asset) => asset.isActiveCollateral
-).length
-
-const totalCollateralDebt = filteredAssets.reduce(
-  (sum, asset) => sum + asset.duNoTsbd,
-  0
-)
-
-const fromTotalAssets =
-  filteredFromPeriodAssets.length
-
-const fromTotalValuation =
-  filteredFromPeriodAssets.reduce(
+const {
+  totalValuation,
+  totalCollateralAssets,
+  totalCollateralDebt,
+} = useMemo(() => {
+  gnT.begin('kpi')
+  const totalValuation = filteredAssets.reduce(
     (sum, asset) => sum + asset.gtDinhGia,
     0
   )
 
-const fromTotalCollateralAssets =
-  filteredFromPeriodAssets.filter(
+  const totalCollateralAssets = filteredAssets.filter(
     (asset) => asset.isActiveCollateral
   ).length
 
-const fromTotalCollateralDebt =
-  filteredFromPeriodAssets.reduce(
+  const totalCollateralDebt = filteredAssets.reduce(
     (sum, asset) => sum + asset.duNoTsbd,
     0
   )
+
+  const result = {
+    totalValuation,
+    totalCollateralAssets,
+    totalCollateralDebt,
+  }
+  gnT.end('kpi')
+  return result
+}, [filteredAssets])
+
+const totalAssets = filteredAssets.length
+
+const fromTotalAssets =
+  filteredFromPeriodAssets.length
+
+const {
+  fromTotalValuation,
+  fromTotalCollateralAssets,
+  fromTotalCollateralDebt,
+} = useMemo(() => {
+  gnT.begin('kpiFrom')
+  const fromTotalValuation =
+    filteredFromPeriodAssets.reduce(
+      (sum, asset) => sum + asset.gtDinhGia,
+      0
+    )
+
+  const fromTotalCollateralAssets =
+    filteredFromPeriodAssets.filter(
+      (asset) => asset.isActiveCollateral
+    ).length
+
+  const fromTotalCollateralDebt =
+    filteredFromPeriodAssets.reduce(
+      (sum, asset) => sum + asset.duNoTsbd,
+      0
+    )
+
+  const result = {
+    fromTotalValuation,
+    fromTotalCollateralAssets,
+    fromTotalCollateralDebt,
+  }
+  gnT.end('kpiFrom')
+  return result
+}, [filteredFromPeriodAssets])
 
 const assetDelta =
   totalAssets - fromTotalAssets
@@ -444,29 +594,63 @@ const collateralDebtDelta =
   totalCollateralDebt -
   fromTotalCollateralDebt
 
-const comparisonAssets =
-  timeMode === 'Khoảng thời gian'
-    ? buildComparisonAssets({
-        fromAssets: filteredFromPeriodAssets,
-        toAssets: filteredAssets,
-        assetsByPeriodInRange,
-        fromPeriod,
-        toPeriod,
-        dataset: activeDataset,
-      })
-    : []
+const comparisonAssets = useMemo(
+  () => {
+    gnT.begin('comparison')
+    const result =
+    timeMode === 'Khoảng thời gian'
+      ? buildComparisonAssets({
+          fromAssets: filteredFromPeriodAssets,
+          toAssets: filteredAssets,
+          assetsByPeriodInRange,
+          fromPeriod,
+          toPeriod,
+          dataset: activeDataset,
+        })
+      : []
+    gnT.end('comparison')
+    return result
+  },
+  [
+    timeMode,
+    filteredFromPeriodAssets,
+    filteredAssets,
+    assetsByPeriodInRange,
+    fromPeriod,
+    toPeriod,
+    activeDataset,
+  ]
+)
 
-const filteredComparisonAssets =
-  filterComparisonAssets(comparisonAssets, {
-    changeType,
-    valuationRisk,
-  })
-          const mapAssets =
-  timeMode === 'Một kỳ'
-    ? filteredAssets
-    : filteredComparisonAssets
-        .map((item) => item.toAsset ?? item.fromAsset)
-        .filter(Boolean)
+const filteredComparisonAssets = useMemo(
+  () =>
+    filterComparisonAssets(comparisonAssets, {
+      changeType,
+      valuationRisk,
+    }),
+  [comparisonAssets, changeType, valuationRisk]
+)
+
+const mapAssets = useMemo(
+  () =>
+    timeMode === 'Một kỳ'
+      ? filteredAssets
+      : filteredComparisonAssets
+          .map((item) => item.toAsset ?? item.fromAsset)
+          .filter(Boolean),
+  [timeMode, filteredAssets, filteredComparisonAssets]
+)
+
+const mapFilteredComparisonAssets = useMemo(
+  () =>
+    mapFilterIdSet
+      ? filteredComparisonAssets.filter((item) =>
+          mapFilterIdSet.has(item.maTsDg)
+        )
+      : filteredComparisonAssets,
+  [filteredComparisonAssets, mapFilterIdSet]
+)
+
         const comparisonFromAssets =
   filteredComparisonAssets
     .map((item) => item.fromAsset)
@@ -1198,9 +1382,128 @@ const handleViewAssetDetail = useCallback((asset) => {
     }, 100)
   }, [])
 
+  const handleMapAssetClick = useCallback(
+    (assetIds) => {
+      mark('map:filter-requested', {
+        count: Array.isArray(assetIds) ? assetIds.length : 0,
+      })
+      setMapFilterAssetIds(
+        Array.isArray(assetIds) && assetIds.length > 0
+          ? assetIds
+          : null
+      )
+
+      if (
+        Array.isArray(assetIds) &&
+        assetIds.length === 1
+      ) {
+        setSelectedAssetId(assetIds[0])
+      }
+    },
+    []
+  )
+
+  const handleClearMapFilter = useCallback(() => {
+    setMapFilterAssetIds(null)
+    setSelectedAssetId(null)
+    // Yêu cầu AssetMap khôi phục viewport về tổng quan
+    // đúng với bối cảnh bộ lọc chung hiện tại.
+    setMapViewResetKey((key) => key + 1)
+  }, [])
+
+  // V2.6.7 perf mark (dev-only, guarded): map filter -> table settled.
+  useEffect(() => {
+    if (!perfEnabled()) return
+    mark('map:filter-settled', {
+      count: mapFilterAssetIds ? mapFilterAssetIds.length : 0,
+    })
+  }, [mapFilterAssetIds])
+
+  const handleOpenDetail = useCallback((asset) => {
+    if (asset) {
+      setDetailAsset(asset)
+    }
+  }, [])
+
+  const handleCloseDetail = useCallback(() => {
+    setDetailAsset(null)
+  }, [])
+
+  const handleNotifClose = useCallback(() => {
+    if (notifClosing) {
+      return
+    }
+
+    setNotifClosing(true)
+
+    window.setTimeout(() => {
+      setNotifOpen(false)
+      setNotifClosing(false)
+    }, 180)
+  }, [notifClosing])
+
+  const handleNotifToggle = useCallback(() => {
+    if (notifOpen) {
+      handleNotifClose()
+      return
+    }
+
+    setNotifView('summary')
+    setNotifDetailItem(null)
+    setNotifAllPage(1)
+
+    const headerEl = headerRef.current
+    const top = headerEl
+      ? headerEl.getBoundingClientRect().bottom
+      : 96
+
+    setNotifDrawerTop(top)
+    setNotifOpen(true)
+  }, [notifOpen, handleNotifClose])
+
+  const handleNotifRowClick = useCallback((item) => {
+    setNotifDetailItem(item)
+    setNotifView('detail')
+  }, [])
+
+  const handleNotifBackToSummary = useCallback(() => {
+    setNotifView('summary')
+  }, [])
+
+  const handleNotifViewAsset = useCallback((item) => {
+    handleNotifClose()
+
+    if (item && item.maTsDg) {
+      handleMapAssetClick([item.maTsDg])
+    }
+  }, [handleMapAssetClick, handleNotifClose])
+
+  const handleNotifViewAll = useCallback(() => {
+    setNotifAllPage(1)
+    setNotifView('all')
+  }, [])
+
+  useEffect(() => {
+    if (!notifOpen) {
+      return
+    }
+
+    const handleEscape = (event) => {
+      if (event.key === 'Escape') {
+        handleNotifClose()
+      }
+    }
+
+    document.addEventListener('keydown', handleEscape)
+
+    return () => {
+      document.removeEventListener('keydown', handleEscape)
+    }
+  }, [notifOpen, handleNotifClose])
+
   return (
     <div className="app">
-      <header className="gn-header">
+      <header className="gn-header" ref={headerRef}>
   <div className="gn-header-wave" />
 
   <div className="gn-brand">
@@ -1246,8 +1549,44 @@ const handleViewAssetDetail = useCallback((asset) => {
   </div>
 
   <div className="gn-notification">
-  <span>🔔</span>
-  <span className="gn-notification-dot" />
+  <button
+    type="button"
+    className="gn-notification-bell"
+    onClick={handleNotifToggle}
+    aria-label={notificationAlerts.alertCount > 0
+      ? `Thông báo: ${notificationAlerts.alertCount} cảnh báo`
+      : 'Thông báo'}
+    aria-expanded={notifOpen}
+    title={notificationAlerts.alertCount > 0
+      ? `Có ${notificationAlerts.alertCount} cảnh báo cần chú ý`
+      : 'Thông báo'}
+  >
+    <svg
+      viewBox="0 0 24 24"
+      width="20"
+      height="20"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
+      <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+    </svg>
+
+    {notificationAlerts.alertCount > 0 && (
+      <span
+        className="gn-notification-badge"
+        aria-hidden="true"
+      >
+        {notificationAlerts.alertCount > 99
+          ? '99+'
+          : notificationAlerts.alertCount}
+      </span>
+    )}
+  </button>
 </div>
 
 <div className="gn-user">
@@ -1269,6 +1608,238 @@ const handleViewAssetDetail = useCallback((asset) => {
   
 </div>
 </header>
+
+{notifOpen && (
+  <div
+    className={`gn-notif-backdrop${
+      notifClosing ? ' is-closing' : ''
+    }`}
+    onClick={handleNotifClose}
+    aria-hidden="true"
+    style={{ top: notifDrawerTop }}
+  />
+)}
+
+{notifOpen && (
+  <aside
+    className={`gn-notif-drawer${
+      notifClosing ? ' is-closing' : ''
+    }`}
+    role="dialog"
+    aria-label="Thông báo"
+    style={{ top: notifDrawerTop }}
+  >
+    <div className="gn-notif-drawer-head">
+      <div className="gn-notif-drawer-header">
+        {notifView !== 'summary' && (
+          <button
+            type="button"
+            className="gn-notif-drawer-back"
+            onClick={handleNotifBackToSummary}
+          >
+            ← Quay lại
+          </button>
+        )}
+
+        <div
+          className={`gn-notif-drawer-title ${
+            notifView === 'summary'
+              ? 'is-left'
+              : 'is-center'
+          }`}
+        >
+          {notifView === 'detail'
+            ? 'Chi tiết cảnh báo'
+            : notifView === 'all'
+              ? 'Tất cả cảnh báo'
+              : 'Thông báo'}
+        </div>
+
+        <button
+          type="button"
+          className="gn-notif-drawer-close"
+          onClick={handleNotifClose}
+          aria-label="Đóng"
+        >
+          ×
+        </button>
+      </div>
+
+      {notifView === 'summary' &&
+        notificationAlerts.alertCount > 0 && (
+          <div className="gn-notif-drawer-sub">
+            Có {notificationAlerts.alertCount} cảnh báo cần chú ý
+          </div>
+        )}
+    </div>
+
+    <div className="gn-notif-drawer-body">
+      {notifView === 'detail' &&
+      notifDetailItem ? (
+        <dl className="gn-notif-detail-rows">
+          <div>
+            <dt>Mã tài sản</dt>
+            <dd>{notifDetailItem.maTsDg}</dd>
+          </div>
+
+          <div>
+            <dt>Tên tài sản</dt>
+            <dd>{notifDetailItem.tenTaiSan}</dd>
+          </div>
+
+          <div>
+            <dt>Tỉnh/TP</dt>
+            <dd>
+              {notifDetailItem.province || '-'}
+            </dd>
+          </div>
+
+          <div>
+            <dt>Trạng thái rủi ro</dt>
+            <dd>Có rủi ro</dd>
+          </div>
+
+          <div>
+            <dt>Số kỳ rủi ro liên tiếp</dt>
+            <dd>
+              {notifDetailItem.consecutivePeriods} kỳ
+            </dd>
+          </div>
+        </dl>
+      ) : notifView === 'all' ? (
+        <>
+          {notifAllPageItems.length > 0 ? (
+            <div className="gn-alert-list-scroll">
+              {notifAllPageItems.map((item) => (
+                <button
+                  type="button"
+                  key={item.maTsDg}
+                  className="gn-alert-row"
+                  onClick={() =>
+                    handleNotifViewAsset(item)
+                  }
+                >
+                  <span className="gn-alert-row-code">
+                    {item.maTsDg}
+                  </span>
+
+                  <span
+                    className="gn-alert-row-name"
+                    title={item.tenTaiSan}
+                  >
+                    {item.tenTaiSan}
+                  </span>
+
+                  <span className="gn-alert-row-period">
+                    Rủi ro liên tiếp {item.consecutivePeriods} kỳ
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="gn-notification-empty">
+              Không có thông báo mới.
+            </div>
+          )}
+        </>
+      ) : notificationAlerts.alertCount === 0 ? (
+        <div className="gn-notification-empty">
+          Không có thông báo mới.
+        </div>
+      ) : (
+        <div className="gn-notification-scroll">
+          <ul className="gn-notification-items">
+            {notificationAlerts.visibleItems.map((item) => (
+              <li key={item.maTsDg}>
+                <button
+                  type="button"
+                  className="gn-notification-item"
+                  onClick={() =>
+                    handleNotifRowClick(item)
+                  }
+                >
+                  <div className="gn-notification-item-main">
+                    <span className="gn-notification-item-code">
+                      {item.maTsDg}
+                    </span>
+
+                    <span
+                      className="gn-notification-item-name"
+                      title={item.tenTaiSan}
+                    >
+                      {item.tenTaiSan}
+                    </span>
+                  </div>
+
+                  <span className="gn-notification-item-period">
+                    Rủi ro liên tiếp {item.consecutivePeriods} kỳ
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+
+    {notifView === 'summary' &&
+    notificationAlerts.alertCount > 0 ? (
+      <div className="gn-notif-drawer-footer">
+        <button
+          type="button"
+          className="gn-notification-more"
+          onClick={handleNotifViewAll}
+        >
+          Xem tất cả cảnh báo
+        </button>
+      </div>
+    ) : notifView === 'detail' &&
+      notifDetailItem ? (
+      <div className="gn-notif-drawer-footer">
+        <button
+          type="button"
+          className="gn-notif-btn-primary"
+          onClick={() =>
+            handleNotifViewAsset(notifDetailItem)
+          }
+        >
+          Xem tài sản
+        </button>
+      </div>
+    ) : notifView === 'all' &&
+      notifAllTotalPages > 1 ? (
+      <div className="gn-alert-list-pager">
+        <button
+          type="button"
+          className="gn-alert-pager-btn"
+          disabled={notifAllPage <= 1}
+          onClick={() =>
+            setNotifAllPage((page) => page - 1)
+          }
+        >
+          ← Trước
+        </button>
+
+        <span className="gn-alert-pager-info">
+          Trang {notifAllPage} / {notifAllTotalPages}
+        </span>
+
+        <button
+          type="button"
+          className="gn-alert-pager-btn"
+          disabled={
+            notifAllPage >= notifAllTotalPages
+          }
+          onClick={() =>
+            setNotifAllPage((page) => page + 1)
+          }
+        >
+          Sau →
+        </button>
+      </div>
+    ) : null}
+  </aside>
+)}
 
       <section
         className={`workspace ${
@@ -1317,9 +1888,10 @@ const handleViewAssetDetail = useCallback((asset) => {
           Chế độ thời gian
        <select
          value={timeMode}
-          onChange={(event) =>
-           setTimeMode(event.target.value)
-           }
+          onChange={(event) => {
+            gnT.event('filter:start')
+            setTimeMode(event.target.value)
+          }}
          >
            <option>Một kỳ</option>
            <option>Khoảng thời gian</option>
@@ -1331,9 +1903,10 @@ const handleViewAssetDetail = useCallback((asset) => {
     Kỳ báo cáo
     <select
       value={reportingPeriod}
-      onChange={(event) =>
+      onChange={(event) => {
+        gnT.event('filter:start')
         setReportingPeriod(event.target.value)
-      }
+      }}
     >
       {reportingPeriods.map((period) => (
         <option
@@ -1353,9 +1926,10 @@ const handleViewAssetDetail = useCallback((asset) => {
       Từ kỳ
       <select
         value={fromPeriod}
-        onChange={(event) =>
+        onChange={(event) => {
+          gnT.event('filter:start')
           setFromPeriod(event.target.value)
-        }
+        }}
       >
        {reportingPeriods
   .filter((period) => period <= toPeriod)
@@ -1374,9 +1948,10 @@ const handleViewAssetDetail = useCallback((asset) => {
       Đến kỳ
       <select
         value={toPeriod}
-        onChange={(event) =>
+        onChange={(event) => {
+          gnT.event('filter:start')
           setToPeriod(event.target.value)
-        }
+        }}
       >
         {reportingPeriods
   .filter((period) => period >= fromPeriod)
@@ -1394,9 +1969,10 @@ const handleViewAssetDetail = useCallback((asset) => {
   Loại biến động
   <select
     value={changeType}
-    onChange={(event) =>
+    onChange={(event) => {
+      gnT.event('filter:start')
       setChangeType(event.target.value)
-    }
+    }}
   >
     <option>Tất cả</option>
     <option value="Phát sinh mới">Tài sản phát sinh mới</option>
@@ -1417,9 +1993,10 @@ const handleViewAssetDetail = useCallback((asset) => {
             Đối tượng
             <select
               value={objectType}
-              onChange={(event) =>
+              onChange={(event) => {
+                gnT.event('filter:start')
                 setObjectType(event.target.value)
-              }
+              }}
             >
               <option>Tất cả</option>
               <option>TSBĐ đang bảo đảm</option>
@@ -1431,9 +2008,10 @@ const handleViewAssetDetail = useCallback((asset) => {
             Nhóm tài sản
             <select
               value={assetGroup}
-              onChange={(event) =>
+              onChange={(event) => {
+                gnT.event('filter:start')
                 setAssetGroup(event.target.value)
-              }
+              }}
             >
               <option>Tất cả</option>
               {filterOptions.assetGroups.map((value) => (
@@ -1446,9 +2024,10 @@ const handleViewAssetDetail = useCallback((asset) => {
             Tỉnh/Thành phố
             <select
               value={province}
-              onChange={(event) =>
+              onChange={(event) => {
+                gnT.event('filter:start')
                 setProvince(event.target.value)
-              }
+              }}
             >
               <option>Tất cả</option>
               {filterOptions.provinces.map((value) => (
@@ -1460,9 +2039,10 @@ const handleViewAssetDetail = useCallback((asset) => {
              Đơn vị định giá
           <select
             value={valuationUnit}
-             onChange={(event) =>
+             onChange={(event) => {
+              gnT.event('filter:start')
               setValuationUnit(event.target.value)
-             }
+             }}
             >
     <option>Tất cả</option>
     {filterOptions.valuationUnits.map((value) => (
@@ -1475,9 +2055,10 @@ const handleViewAssetDetail = useCallback((asset) => {
             Rủi ro định giá
             <select
               value={valuationRisk}
-              onChange={(event) =>
+              onChange={(event) => {
+                gnT.event('filter:start')
                 setValuationRisk(event.target.value)
-              }
+              }}
             >
               <option>Tất cả</option>
               <option>Không phát hiện</option>
@@ -1504,6 +2085,8 @@ const handleViewAssetDetail = useCallback((asset) => {
       assets={mapAssets}
       selectedAssetId={selectedAssetId}
       onViewDetail={handleViewAssetDetail}
+      onAssetClick={handleMapAssetClick}
+      viewResetKey={mapViewResetKey}
       changeType={
         timeMode === 'Khoảng thời gian'
           ? changeType
@@ -1655,7 +2238,7 @@ const handleViewAssetDetail = useCallback((asset) => {
       KPI 4 - RỦI RO KÉO DÀI
       ========================= */}
   <div className={`kpi-card kpi-card-risk-persistent ${persistentRiskSummary.persistentAssets > 0 ? 'has-alert' : 'is-clear'}`}>
-    <span>Tài sản rủi ro kéo dài</span>
+      <span>Rủi ro kéo dài</span>
     <strong>{persistentRiskSummary.persistentAssets}</strong>
     <small>
       {!persistentRiskSummary.available
@@ -2069,7 +2652,7 @@ const handleViewAssetDetail = useCallback((asset) => {
     </div>
   )}
 
-  <hr />
+  <div className="ai-section-divider" />
 
  <div className="ai-panel-v2">
   <div className="ai-panel-header">
@@ -2175,7 +2758,7 @@ const handleViewAssetDetail = useCallback((asset) => {
   aria-label="Hỏi AI"
 >
   {aiLoading ? (
-  '...'
+  <span className="ai-send-spinner" />
 ) : (
   <svg
     width="20"
@@ -2270,12 +2853,7 @@ const handleViewAssetDetail = useCallback((asset) => {
 
 {aiJobs.length > 0 && (
   <div
-    style={{
-      marginTop: '12px',
-      display: 'flex',
-      flexDirection: 'column',
-      gap: '12px',
-    }}
+    className="ai-jobs-list"
   >
     {aiJobs.map((job, index) => {
       const data =
@@ -2380,9 +2958,9 @@ const handleViewAssetDetail = useCallback((asset) => {
           {job.status ===
             'SUCCESS' && (
             <>
-              <div className="ai-answer-summary">
-                {renderAiAnswer(job.answer)}
-              </div>
+          <div className="ai-answer-summary ai-answer-summary--structured">
+                  {renderAiAnswer(job.answer)}
+                </div>
 
               {/*
                 ==========================
@@ -2850,7 +3428,7 @@ const handleViewAssetDetail = useCallback((asset) => {
 
               <details className="ai-technical-details">
                 <summary>
-                  Xem chi tiết truy vấn
+                  Chi tiết truy vấn kỹ thuật
                 </summary>
 
                 <div className="ai-technical-block">
@@ -2952,13 +3530,13 @@ const handleViewAssetDetail = useCallback((asset) => {
 
     <span className="table-result-count">
       {timeMode === 'Một kỳ'
-        ? `${filteredAssets.length} tài sản${
-            filteredAssets.length > TABLE_RENDER_LIMIT
+        ? `${mapFilteredAssets.length} tài sản${
+            mapFilteredAssets.length > TABLE_RENDER_LIMIT
               ? ` · hiển thị ${TABLE_RENDER_LIMIT}`
               : ''
           }`
-        : `${filteredComparisonAssets.length} tài sản${
-            filteredComparisonAssets.length > TABLE_RENDER_LIMIT
+        : `${mapFilteredComparisonAssets.length} tài sản${
+            mapFilteredComparisonAssets.length > TABLE_RENDER_LIMIT
               ? ` · hiển thị ${TABLE_RENDER_LIMIT}`
               : ''
           }`}
@@ -2966,19 +3544,368 @@ const handleViewAssetDetail = useCallback((asset) => {
   </div>
 </div>
 
+  {mapFilterAssetIds &&
+    mapFilterAssetIds.length > 0 && (
+      <div className="map-filter-banner">
+        <span className="map-filter-banner-text">
+          Đang lọc theo bản đồ:{' '}
+          <strong>
+            {mapFilterAssetIds.length === 1
+              ? mapFilterAssetIds[0]
+              : `${mapFilterAssetIds.length} tài sản`}
+          </strong>
+        </span>
+
+        <button
+          type="button"
+          className="map-filter-banner-clear"
+          onClick={handleClearMapFilter}
+        >
+          Xóa lọc
+        </button>
+      </div>
+    )}
+
+  {detailAsset ? (
+    <div className="asset-detail-view">
+      <div className="asset-detail-header">
+        <div>
+          <div className="asset-detail-title">
+            Chi tiết tài sản
+          </div>
+
+          <div className="asset-detail-asset">
+            <strong>{detailAsset.maTsDg}</strong>
+            <span>
+              {detailAsset.loaiTsCap2} ·{' '}
+              {detailAsset.tinhTp}
+            </span>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          className="asset-detail-back"
+          onClick={handleCloseDetail}
+        >
+          ← Quay lại
+        </button>
+      </div>
+
+      <div className="asset-detail-grid">
+        <section className="asset-detail-card">
+          <h4>Thông tin tài sản</h4>
+
+          <dl className="asset-detail-rows">
+            <div>
+              <dt>Mã tài sản</dt>
+              <dd>{detailAsset.maTsDg}</dd>
+            </div>
+
+            {detailAsset.tenTaiSan && (
+              <div>
+                <dt>Tên tài sản</dt>
+                <dd>{detailAsset.tenTaiSan}</dd>
+              </div>
+            )}
+
+            {detailAsset.nhomTsCap1 && (
+              <div>
+                <dt>Nhóm TS</dt>
+                <dd>{detailAsset.nhomTsCap1}</dd>
+              </div>
+            )}
+
+            {detailAsset.loaiTsCap2 && (
+              <div>
+                <dt>Loại TS</dt>
+                <dd>{detailAsset.loaiTsCap2}</dd>
+              </div>
+            )}
+
+            <div>
+              <dt>Tỉnh/Thành phố</dt>
+              <dd>{detailAsset.tinhTp || '-'}</dd>
+            </div>
+
+            {detailAsset.diaChiChiTiet && (
+              <div>
+                <dt>Địa chỉ</dt>
+                <dd>{detailAsset.diaChiChiTiet}</dd>
+              </div>
+            )}
+
+            {detailAsset.tenKhachHang && (
+              <div>
+                <dt>Khách hàng</dt>
+                <dd>{detailAsset.tenKhachHang}</dd>
+              </div>
+            )}
+          </dl>
+        </section>
+
+        <section className="asset-detail-card">
+          <h4>Định giá</h4>
+
+          <dl className="asset-detail-rows">
+            <div>
+              <dt>Giá trị định giá</dt>
+              <dd className="asset-detail-highlight">
+                {formatBillion(detailAsset.gtDinhGia)}
+              </dd>
+            </div>
+
+            {detailAsset.donViDinhGia && (
+              <div>
+                <dt>Đơn vị định giá</dt>
+                <dd>{detailAsset.donViDinhGia}</dd>
+              </div>
+            )}
+
+            {detailAsset.ngayDinhGia && (
+              <div>
+                <dt>Ngày định giá</dt>
+                <dd>{detailAsset.ngayDinhGia}</dd>
+              </div>
+            )}
+
+            {detailAsset.gtBaoDam !== undefined && (
+              <div>
+                <dt>Giá trị bảo đảm</dt>
+                <dd>{formatBillion(detailAsset.gtBaoDam)}</dd>
+              </div>
+            )}
+          </dl>
+        </section>
+
+        <section className="asset-detail-card">
+          <h4>TSBĐ</h4>
+
+          <dl className="asset-detail-rows">
+            <div>
+              <dt>Mã TSBĐ</dt>
+              <dd>{detailAsset.maTsbd || '-'}</dd>
+            </div>
+
+            <div>
+              <dt>Trạng thái TSBĐ</dt>
+              <dd>{detailAsset.trangThaiTsbd || '-'}</dd>
+            </div>
+
+            {detailAsset.ngayNhanTsbd && (
+              <div>
+                <dt>Ngày nhận TSBĐ</dt>
+                <dd>{detailAsset.ngayNhanTsbd}</dd>
+              </div>
+            )}
+
+            {detailAsset.ngayGiaiChap && (
+              <div>
+                <dt>Ngày giải chấp</dt>
+                <dd>{detailAsset.ngayGiaiChap}</dd>
+              </div>
+            )}
+
+            {detailAsset.donViQuanLy && (
+              <div>
+                <dt>Đơn vị quản lý</dt>
+                <dd>{detailAsset.donViQuanLy}</dd>
+              </div>
+            )}
+
+            {detailAsset.thanhKhoan && (
+              <div>
+                <dt>Thanh khoản</dt>
+                <dd>{detailAsset.thanhKhoan}</dd>
+              </div>
+            )}
+          </dl>
+        </section>
+
+        <section className="asset-detail-card">
+          <h4>Dư nợ</h4>
+
+          <dl className="asset-detail-rows">
+            <div>
+              <dt>Dư nợ TSBĐ</dt>
+              <dd>
+                {detailAsset.duNoTsbd
+                  ? formatBillion(detailAsset.duNoTsbd)
+                  : '-'}
+              </dd>
+            </div>
+
+            <div>
+              <dt>LTV</dt>
+              <dd>
+                {detailAsset.ltv !== null
+                  ? `${(detailAsset.ltv * 100).toFixed(1)}%`
+                  : '-'}
+              </dd>
+            </div>
+          </dl>
+        </section>
+
+        <section className="asset-detail-card">
+          <h4>Rủi ro</h4>
+
+          {Array.isArray(detailAsset.risks) &&
+          detailAsset.risks.length > 0 ? (
+            <ul className="asset-detail-risk-list">
+              {detailAsset.risks.map((risk) => (
+                <li key={risk.maRuiRo}>
+                  <strong>{risk.loaiRuiRo}</strong>
+                  {risk.ghiChu && (
+                    <span>{risk.ghiChu}</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="asset-detail-empty">
+              Không phát hiện rủi ro
+            </p>
+          )}
+
+          {persistentRiskById.has(
+            detailAsset.maTsDg
+          ) && (
+            <div className="asset-detail-warning">
+              ⚠ Rủi ro kéo dài ≥{' '}
+              {
+                persistentRiskById.get(
+                  detailAsset.maTsDg
+                ).consecutivePeriods
+              }{' '}
+              kỳ liên tiếp
+            </div>
+          )}
+        </section>
+
+        <section className="asset-detail-card">
+          <h4>Lịch sử theo kỳ</h4>
+
+          {timeMode === 'Khoảng thời gian' ? (
+            (() => {
+              const cmpItem =
+                filteredComparisonAssets.find(
+                  (item) =>
+                    item.maTsDg ===
+                    detailAsset.maTsDg
+                )
+
+              if (!cmpItem) {
+                return (
+                  <p className="asset-detail-empty">
+                    Chưa có dữ liệu
+                  </p>
+                )
+              }
+
+              return (
+                <dl className="asset-detail-rows">
+                  <div>
+                    <dt>GT đầu kỳ</dt>
+                    <dd>
+                      {cmpItem.fromAsset
+                        ? formatBillion(
+                            cmpItem.fromValuation
+                          )
+                        : '-'}
+                    </dd>
+                  </div>
+
+                  <div>
+                    <dt>GT cuối kỳ</dt>
+                    <dd>
+                      {cmpItem.toAsset
+                        ? formatBillion(
+                            cmpItem.toValuation
+                          )
+                        : '-'}
+                    </dd>
+                  </div>
+
+                  <div>
+                    <dt>Biến động GT</dt>
+                    <dd
+                      className={
+                        cmpItem.valuationChange > 0
+                          ? 'asset-change-up'
+                          : cmpItem.valuationChange < 0
+                            ? 'asset-change-down'
+                            : ''
+                      }
+                    >
+                      {`${cmpItem.valuationChange >= 0 ? '+' : ''}${formatBillion(cmpItem.valuationChange)}`}
+                    </dd>
+                  </div>
+
+                  <div>
+                    <dt>Dư nợ đầu kỳ</dt>
+                    <dd>
+                      {cmpItem.fromCollateralSnapshot
+                        ? formatBillion(
+                            cmpItem.fromDebt
+                          )
+                        : '-'}
+                    </dd>
+                  </div>
+
+                  <div>
+                    <dt>Dư nợ cuối kỳ</dt>
+                    <dd>
+                      {cmpItem.toCollateralSnapshot
+                        ? formatBillion(
+                            cmpItem.toDebt
+                          )
+                        : '-'}
+                    </dd>
+                  </div>
+
+                  <div>
+                    <dt>Biến động dư nợ</dt>
+                    <dd
+                      className={
+                        cmpItem.debtChange > 0
+                          ? 'asset-change-up'
+                          : cmpItem.debtChange < 0
+                            ? 'asset-change-down'
+                            : ''
+                      }
+                    >
+                      {`${cmpItem.debtChange >= 0 ? '+' : ''}${formatBillion(cmpItem.debtChange)}`}
+                    </dd>
+                  </div>
+
+                  {cmpItem.changeStatus && (
+                    <div>
+                      <dt>Trạng thái biến động</dt>
+                      <dd>{cmpItem.changeStatus}</dd>
+                    </div>
+                  )}
+                </dl>
+              )
+            })()
+          ) : (
+            <p className="asset-detail-empty">
+              Chưa có dữ liệu
+            </p>
+          )}
+        </section>
+      </div>
+    </div>
+  ) : (
   <div className="table-wrapper">
     {timeMode === 'Một kỳ' ? (
       <table>
         <thead>
           <tr>
             <th>Mã TS</th>
-            <th>Nhóm TS</th>
-            <th>Loại TS</th>
             <th>Tỉnh/TP</th>
             <th>GT định giá</th>
-            <th>Mã TSBĐ</th>
-            <th>Dư nợ</th>
-            <th>LTV</th>
+            <th>Trạng thái</th>
+            <th>Xem thêm</th>
           </tr>
         </thead>
 
@@ -3006,8 +3933,6 @@ const handleViewAssetDetail = useCallback((asset) => {
                   </span>
                 )}
               </td>
-              <td>{asset.nhomTsCap1}</td>
-              <td>{asset.loaiTsCap2}</td>
               <td>{asset.tinhTp}</td>
 
               <td>
@@ -3015,19 +3940,33 @@ const handleViewAssetDetail = useCallback((asset) => {
               </td>
 
               <td>
-                {asset.maTsbd ?? '-'}
+                {persistentRiskById.has(asset.maTsDg) ? (
+                  <span className="change-status status-down">
+                    Rủi ro kéo dài
+                  </span>
+                ) : Array.isArray(asset.risks) &&
+                  asset.risks.length > 0 ? (
+                  <span className="change-status status-down">
+                    Có rủi ro
+                  </span>
+                ) : (
+                  <span className="change-status status-stable">
+                    Bình thường
+                  </span>
+                )}
               </td>
 
               <td>
-                {asset.maTsbd
-                  ? formatBillion(asset.duNoTsbd)
-                  : '-'}
-              </td>
-
-              <td>
-                {asset.ltv !== null
-                  ? `${(asset.ltv * 100).toFixed(1)}%`
-                  : '-'}
+                <button
+                  type="button"
+                  className="row-detail-button"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    handleOpenDetail(asset)
+                  }}
+                >
+                  Xem thêm
+                </button>
               </td>
             </tr>
           ))}
@@ -3038,18 +3977,17 @@ const handleViewAssetDetail = useCallback((asset) => {
         <thead>
           <tr>
             <th>Mã TS</th>
+            <th>Tỉnh/TP</th>
             <th>GT đầu kỳ</th>
             <th>GT cuối kỳ</th>
             <th>Biến động GT</th>
-            <th>Dư nợ đầu kỳ</th>
-            <th>Dư nợ cuối kỳ</th>
-            <th>Biến động dư nợ</th>
             <th>Trạng thái</th>
+            <th>Xem thêm</th>
           </tr>
         </thead>
 
         <tbody>
-          {sliceForTable(filteredComparisonAssets).map((item) => (
+          {sliceForTable(mapFilteredComparisonAssets).map((item) => (
   <tr
     key={item.maTsDg}
     id={`asset-row-${item.maTsDg}`}
@@ -3063,6 +4001,12 @@ const handleViewAssetDetail = useCallback((asset) => {
     }
   >
               <td>{item.maTsDg}</td>
+
+              <td>
+                {item.toAsset?.tinhTp ??
+                  item.fromAsset?.tinhTp ??
+                  '-'}
+              </td>
 
               <td>
                 {item.fromAsset
@@ -3080,23 +4024,6 @@ const handleViewAssetDetail = useCallback((asset) => {
                 {item.valuationChange >= 0 ? '+' : ''}
                 {formatBillion(item.valuationChange)}
               </td>
-
-              <td>
-  {item.fromCollateralSnapshot
-    ? formatBillion(item.fromDebt)
-    : '-'}
-</td>
-
-<td>
-  {item.toCollateralSnapshot
-    ? formatBillion(item.toDebt)
-    : '-'}
-</td>
-
-<td>
-  {item.debtChange >= 0 ? '+' : ''}
-  {formatBillion(item.debtChange)}
-</td>
 
 <td>
   {(() => {
@@ -3145,12 +4072,28 @@ const handleViewAssetDetail = useCallback((asset) => {
     )
   })()}
 </td>
+
+              <td>
+                <button
+                  type="button"
+                  className="row-detail-button"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    handleOpenDetail(
+                      item.toAsset ?? item.fromAsset
+                    )
+                  }}
+                >
+                  Xem thêm
+                </button>
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
     )}
   </div>
+  )}
 </section>
 
 <footer className="gn-footer">
@@ -3191,8 +4134,8 @@ const handleViewAssetDetail = useCallback((asset) => {
     </div>
 
     <div className="gn-footer-status">
-      <div>Phiên bản: V1.0.0</div>
-      <div>Dữ liệu cập nhật: 08/2026</div>
+      <div>Phiên bản: V2.6.7</div>
+      <div>Dữ liệu cập nhật: 09/2026</div>
 
       <div className="gn-footer-online">
         <span className="gn-footer-online-dot" />
