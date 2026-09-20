@@ -3,6 +3,7 @@ dist
 .git
 .env
 .env.v3
+.env.v4
 *.log
 New folder.zip
 greennode-agentbase-skills
