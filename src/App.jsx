@@ -126,6 +126,32 @@ const [searchText, setSearchText] =
   const [filterOpen, setFilterOpen] =
   useState(false)
 
+  const hasActiveFilters = useMemo(
+    () =>
+      objectType !== 'Tất cả' ||
+      assetGroup !== 'Tất cả' ||
+      province !== 'Tất cả' ||
+      valuationUnit !== 'Tất cả' ||
+      valuationRisk !== 'Tất cả' ||
+      timeMode !== 'Một kỳ' ||
+      reportingPeriod !== '2026-08-31' ||
+      fromPeriod !== '2026-06-30' ||
+      toPeriod !== '2026-08-31' ||
+      changeType !== 'Tất cả',
+    [
+      objectType,
+      assetGroup,
+      province,
+      valuationUnit,
+      valuationRisk,
+      timeMode,
+      reportingPeriod,
+      fromPeriod,
+      toPeriod,
+      changeType,
+    ]
+  )
+
 const [aiQuestion, setAiQuestion] =
   useState('')
 
@@ -1367,16 +1393,17 @@ const excelReadyToImport =
   totalExcelErrors === 0
 const handleViewAssetDetail = useCallback((asset) => {
     setSelectedAssetId(asset.maTsDg)
+    setDetailAsset(asset)
 
     setTimeout(() => {
-      const row = document.getElementById(
-        `asset-row-${asset.maTsDg}`
+      const detail = document.getElementById(
+        'asset-detail-view'
       )
 
-      if (row) {
-        row.scrollIntoView({
+      if (detail) {
+        detail.scrollIntoView({
           behavior: 'smooth',
-          block: 'center',
+          block: 'start',
         })
       }
     }, 100)
@@ -1871,7 +1898,18 @@ const handleViewAssetDetail = useCallback((asset) => {
                 {filterOpen && (
   <aside className="filter-panel">
     <div className="filter-panel-header">
-      <h2>Bộ lọc thông tin</h2>
+      <div className="filter-panel-header-title">
+        <h2>Bộ lọc thông tin</h2>
+
+        <p
+          className="filter-panel-hint"
+          aria-live="polite"
+        >
+          {hasActiveFilters
+            ? '✓ Đã áp dụng bộ lọc • Nhấn ✕ để xem kết quả'
+            : 'Chọn điều kiện lọc • Nhấn ✕ để xem kết quả trên bản đồ'}
+        </p>
+      </div>
 
       <button
         type="button"
@@ -3567,7 +3605,10 @@ const handleViewAssetDetail = useCallback((asset) => {
     )}
 
   {detailAsset ? (
-    <div className="asset-detail-view">
+    <div
+      className="asset-detail-view"
+      id="asset-detail-view"
+    >
       <div className="asset-detail-header">
         <div>
           <div className="asset-detail-title">
