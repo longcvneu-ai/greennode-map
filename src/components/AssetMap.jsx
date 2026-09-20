@@ -13,6 +13,12 @@ import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
 import { memo, useCallback, useEffect, useMemo, useRef } from 'react'
 import { prepareMapData } from '../services/coordinateProvenanceService.js'
+import {
+  buildCoordinateGroups,
+  coordinateGroupRiskCount,
+  coordinateKey,
+  hasRisk,
+} from '../services/coordinateLocationService.js'
 import { mark, perfEnabled } from '../services/mapPerfMarks.js'
 
 delete L.Icon.Default.prototype._getIconUrl
@@ -323,7 +329,7 @@ const createRiskClusterIconFor = (valuationRisk) => (cluster) => {
 // spiderfyOnMaxZoom, iconCreateFunction), còn các marker được quản lý
 // imperatively bằng Leaflet — CHỈ diff phần dân số thay đổi, không tái dựng
 // lại React element cho 10.000 phần tử.
-const buildAssetPopupContent = (asset, changeType, onViewDetailRef) => {
+const buildAssetPopupContent = (asset, changeType, onViewDetailRef, coordinateGroup) => {
   const root = document.createElement('div')
 
   const title = document.createElement('div')
@@ -398,6 +404,65 @@ const buildAssetPopupContent = (asset, changeType, onViewDetailRef) => {
     root.append(row('Biến động', changeType))
   }
 
+  if (
+    Array.isArray(coordinateGroup) &&
+    coordinateGroup.length > 1
+  ) {
+    const hasGroupRisk = coordinateGroup.some((item) => hasRisk(item))
+    const groupRiskCount = coordinateGroupRiskCount(coordinateGroup)
+
+    const locationInfo = document.createElement('div')
+    locationInfo.className = 'popup-location-info'
+
+    const countLabel = document.createElement('strong')
+    countLabel.className = 'popup-location-count'
+    countLabel.textContent =
+      `${coordinateGroup.length} TSBĐ tại vị trí này`
+
+    const riskLabel = document.createElement('span')
+    riskLabel.className =
+      `popup-location-risk ${hasGroupRisk ? 'has-risk' : 'no-risk'}`
+    riskLabel.textContent = hasGroupRisk
+      ? `Có rủi ro phát hiện (${groupRiskCount})`
+      : 'Không phát hiện rủi ro'
+
+    locationInfo.append(countLabel, riskLabel)
+
+    const list = document.createElement('div')
+    list.className = 'popup-asset-list'
+
+    for (const sibling of coordinateGroup) {
+      const item = document.createElement('button')
+      item.type = 'button'
+      item.className =
+        `popup-asset-row ${hasRisk(sibling) ? 'has-risk' : ''}`
+
+      const dot = document.createElement('span')
+      dot.className =
+        `popup-asset-risk-dot ${hasRisk(sibling) ? 'risk' : 'safe'}`
+
+      const code = document.createElement('span')
+      code.className = 'popup-asset-row-code'
+      code.textContent = sibling.maTsDg
+
+      const name = document.createElement('span')
+      name.className = 'popup-asset-row-name'
+      name.textContent =
+        sibling.tenTaiSan ||
+        sibling.loaiTsCap2 ||
+        ''
+
+      item.append(dot, code, name)
+      item.addEventListener('click', (event) => {
+        event.stopPropagation()
+        onViewDetailRef.current?.(sibling)
+      })
+      list.append(item)
+    }
+
+    root.append(locationInfo, list)
+  }
+
   const button = document.createElement('button')
   button.type = 'button'
   button.className = 'popup-detail-button'
@@ -450,6 +515,15 @@ function ClusterMarkets({
     assetsRef.current = assets
   }, [assets])
 
+  const coordinateGroups = useMemo(
+    () => buildCoordinateGroups(assets),
+    [assets]
+  )
+  const coordinateGroupsRef = useRef(coordinateGroups)
+  useEffect(() => {
+    coordinateGroupsRef.current = coordinateGroups
+  }, [coordinateGroups])
+
   // V2.6.7 PERF (10K general filter): diff marker theo dân số lọc mới gây
   // removeLayers/addLayers hàng nghìn marker + dựng lại cụm ngay trong effect.
   // Defer sang rAF để lần render bộ lọc không chặn main thread (0.6-1.7s),
@@ -498,7 +572,10 @@ function ClusterMarkets({
             buildAssetPopupContent(
               asset,
               changeTypeRef.current,
-              onViewDetailRef
+              onViewDetailRef,
+              coordinateGroupsRef.current.get(
+                coordinateKey(asset.latitude, asset.longitude)
+              )
             ),
             { className: 'asset-popup' }
           )
@@ -526,6 +603,17 @@ function ClusterMarkets({
           markerLatLng.lng !== lng
         ) {
           marker.setLatLng([lat, lng])
+          marker.bindPopup(
+            buildAssetPopupContent(
+              asset,
+              changeTypeRef.current,
+              onViewDetailRef,
+              coordinateGroupsRef.current.get(
+                coordinateKey(asset.latitude, asset.longitude)
+              )
+            ),
+            { className: 'asset-popup' }
+          )
         }
 
         if (marker.options.icon !== icon) {

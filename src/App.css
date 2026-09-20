@@ -456,6 +456,23 @@ tbody tr:hover {
   line-height: 1.4 !important;
 }
 
+/* ===== ASSET POPUP — CO-LOCATION GROUP (wider) ===== */
+
+.asset-popup .leaflet-popup-content:has(.popup-location-info) {
+  width: 280px !important;
+  min-width: 280px !important;
+  max-width: 280px !important;
+  margin-bottom: 18px !important;
+}
+
+@media (max-width: 480px) {
+  .asset-popup .leaflet-popup-content:has(.popup-location-info) {
+    width: min(280px, calc(100vw - 48px)) !important;
+    min-width: 0 !important;
+    max-width: min(280px, calc(100vw - 48px)) !important;
+  }
+}
+
 .asset-popup .popup-title {
   font-size: 15px !important;
   font-weight: 700 !important;
@@ -520,6 +537,7 @@ tbody tr:hover {
   background: #f2f6fc;
   text-align: left;
   cursor: pointer;
+  font-size: 12px;
 }
 
 .popup-asset-row:hover {
@@ -528,7 +546,7 @@ tbody tr:hover {
 
 .popup-asset-row-code {
   flex: 0 0 auto;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   color: #3864a6;
 }
@@ -538,12 +556,79 @@ tbody tr:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: 12px;
   color: #263247;
 }
 
 .asset-popup .leaflet-popup-close-button {
   font-size: 18px !important;
+}
+/* ===== ASSET POPUP — EXACT CO-LOCATION GROUP ===== */
+
+.popup-location-info {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed #d9dee5;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+.asset-popup .leaflet-popup-content .popup-location-count {
+  display: block;
+  font-size: 17px !important;
+  line-height: 1.25 !important;
+  font-weight: 700 !important;
+  margin: 0 0 4px 0 !important;
+  color: #172033;
+  overflow: visible;
+}
+
+.popup-location-risk {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.popup-location-risk.has-risk {
+  color: #dc2626;
+}
+
+.popup-location-risk.no-risk {
+  color: #15803d;
+}
+
+.popup-asset-risk-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.popup-asset-risk-dot.risk {
+  background: #ef4444;
+}
+
+.popup-asset-risk-dot.safe {
+  background: #22c55e;
+}
+
+.popup-asset-list::-webkit-scrollbar {
+  width: 5px;
+}
+
+.popup-asset-list::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 999px;
+}
+
+.popup-asset-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.popup-asset-row.has-risk .popup-asset-row-name {
+  color: #b91c1c;
+  font-weight: 600;
 }
 /* ===== SELECTED TABLE ROW ===== */
 
@@ -5224,7 +5309,7 @@ html, body {
 }
 
 .ai-panel {
-  overscroll-behavior: contain;
+  overscroll-behavior: auto;
 }
 
 @media (max-width: 430px) {
@@ -5622,7 +5707,7 @@ html, body {
   flex-direction: column;
   gap: 12px;
   overflow-y: auto;
-  overscroll-behavior: contain;
+  overscroll-behavior: auto;
   padding-right: 4px;
 }
 @media (min-width: 981px) {
@@ -5633,7 +5718,7 @@ html, body {
   .ai-panel {
     max-height: calc(100vh - 150px);
     overflow-y: auto;
-    overscroll-behavior: contain;
+    overscroll-behavior: auto;
   }
 }
 /* Subtle custom scrollbar (Webkit) */
