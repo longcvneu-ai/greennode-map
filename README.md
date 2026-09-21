@@ -75,7 +75,7 @@ Ví dụ file `.env` (chỉ dùng giá trị giả định / placeholder):
 ```env
 GREENNODE_API_KEY=<your_api_key>
 GREENNODE_BASE_URL=<your_base_url>
-GREENNODE_MODEL=<your_model>
+GREENNODE_MODEL=z-ai/glm-5.2-hackathon
 GREENNODE_TIMEOUT_MS=60000
 PORT=8080
 HOST=0.0.0.0
@@ -149,10 +149,9 @@ npm run test:final-regression
 
 ## 12. Phiên bản
 
-**GreenNode Map V2.6.9**
+**GreenNode Map V2.6.10**
 
 Điểm nổi bật của bản phát hành:
 
-- Cải thiện trải nghiệm cuộn (scrolling) của bảng điều khiển AI.
-- Cải thiện xử lý và truy cập **nhiều tài sản tại cùng tọa độ**.
-- Xác thực ổn định production qua các bộ regression.
+- Migrate AI runtime sang GLM 5.2 (`z-ai/glm-5.2-hackathon`).
+- Không còn phơi bày output thô của model trong phản hồi lỗi API.

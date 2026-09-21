@@ -20,10 +20,56 @@ const GREENNODE_BASE_URL =
 
 const GREENNODE_MODEL =
   process.env.GREENNODE_MODEL ||
-  'qwen/qwen3.6-flash'
+  'z-ai/glm-5.2-hackathon'
 
 const GREENNODE_TIMEOUT_MS =
   Number(process.env.GREENNODE_TIMEOUT_MS || 30000)
+
+function parseModelJson(rawContent) {
+  const text = String(rawContent || '').trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/, '')
+
+  try {
+    return JSON.parse(text)
+  } catch {
+    const start = text.indexOf('{')
+    if (start === -1) throw new SyntaxError('no json object')
+
+    let depth = 0
+    let inString = false
+    let escaped = false
+
+    for (let i = start; i < text.length; i += 1) {
+      const ch = text[i]
+
+      if (inString) {
+        if (escaped) {
+          escaped = false
+        } else if (ch === '\\') {
+          escaped = true
+        } else if (ch === '"') {
+          inString = false
+        }
+        continue
+      }
+
+      if (ch === '"') {
+        inString = true
+      } else if (ch === '{') {
+        depth += 1
+      } else if (ch === '}') {
+        depth -= 1
+      }
+
+      if (depth === 0) {
+        return text.slice(start, i + 1)
+      }
+    }
+
+    throw new SyntaxError('unbalanced json object')
+  }
+}
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -314,12 +360,11 @@ const modelDurationMs =
     let queryPlan
 
     try {
-      queryPlan = JSON.parse(content)
+      queryPlan = parseModelJson(content)
     } catch {
       return res.status(502).json({
         success: false,
         error: 'INVALID_MODEL_JSON',
-        rawContent: content,
       })
     }
     
@@ -444,7 +489,7 @@ app.post('/api/ai/risk-analysis', async (req, res) => {
               { role: 'user', content: JSON.stringify({ question, evidence }) },
             ],
             temperature: 0,
-            max_tokens: 300,
+            max_tokens: 512,
             top_p: 0.95,
           }),
         }
@@ -484,12 +529,11 @@ app.post('/api/ai/risk-analysis', async (req, res) => {
 
     let parsed
     try {
-      parsed = JSON.parse(content)
+      parsed = parseModelJson(content)
     } catch {
       return res.status(502).json({
         success: false,
         error: 'INVALID_MODEL_JSON',
-        rawContent: content,
       })
     }
 
@@ -508,7 +552,6 @@ app.post('/api/ai/risk-analysis', async (req, res) => {
       return res.status(502).json({
         success: false,
         error: 'INVALID_MODEL_JSON',
-        rawContent: content,
       })
     }
 
